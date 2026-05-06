@@ -29,10 +29,10 @@ type Store interface {
 	UndoCommands() UndoRepo
 	Settings() SettingsRepo
 
-	// Atomically allocates and returns the next match_id for the group, then
-	// invokes fn with that ID under a serializable transaction. Returning an
-	// error from fn rolls back. The bot uses this for /match registration.
-	AllocateAndInsertMatch(ctx context.Context, groupID int64, fn func(matchID uint64) error) (uint64, error)
+	// AllocateAndInsertMatch allocates the next match_id for the group, asks
+	// `build` to populate the match row with that ID baked in, and inserts
+	// the row + bumps the counter inside one SerializableReadWrite tx.
+	AllocateAndInsertMatch(ctx context.Context, groupID int64, build func(matchID uint64) models.Match) (uint64, error)
 
 	Close() error
 }

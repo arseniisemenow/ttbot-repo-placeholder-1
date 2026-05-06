@@ -73,14 +73,15 @@ func (s *Store) MatchConfirmations() store.MatchConfirmationRepo { return confir
 func (s *Store) UndoCommands() store.UndoRepo              { return undoRepo{s} }
 func (s *Store) Settings() store.SettingsRepo              { return settingsRepo{s} }
 
-// AllocateAndInsertMatch allocates the next match_id for the group, then runs fn.
-func (s *Store) AllocateAndInsertMatch(ctx context.Context, groupID int64, fn func(matchID uint64) error) (uint64, error) {
+// AllocateAndInsertMatch allocates the next match_id for the group, asks
+// `build` to populate the row, and inserts atomically.
+func (s *Store) AllocateAndInsertMatch(ctx context.Context, groupID int64, build func(matchID uint64) models.Match) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := s.matchCounters[groupID] + 1
-	if err := fn(next); err != nil {
-		return 0, err
-	}
+	row := build(next)
+	row.MatchID = next
+	s.matches[matchKey{row.GroupID, row.MatchID}] = row
 	s.matchCounters[groupID] = next
 	return next, nil
 }

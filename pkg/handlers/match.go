@@ -86,8 +86,8 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 	}
 
 	// Allocate match_id and insert match transactionally.
-	matchID, err := h.Store.AllocateAndInsertMatch(ctx, g.GroupID, func(id uint64) error {
-		match := models.Match{
+	matchID, err := h.Store.AllocateAndInsertMatch(ctx, g.GroupID, func(id uint64) models.Match {
+		return models.Match{
 			GroupID:      g.GroupID,
 			MatchID:      id,
 			Player1ID:    p1User.TelegramID,
@@ -99,13 +99,6 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 			PlayedAt:     now,
 			CreatedAt:    now,
 		}
-		if mems, ok := h.Store.(interface{ PutMatch(models.Match) }); ok {
-			mems.PutMatch(match)
-			return nil
-		}
-		// Fallback: direct upsert via the matches repo. Real ydbstore implements
-		// AllocateAndInsertMatch with proper write inside the closure.
-		return errors.New("store does not expose PutMatch and lacks transactional path")
 	})
 	if err != nil {
 		return err
