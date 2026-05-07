@@ -344,6 +344,132 @@ func TestPeriodicExpiresPendingMatch(t *testing.T) {
 	}
 }
 
+// ---------- /admin auto-promote --------------------------------------
+
+func TestAdminAutoPromotesUserRow(t *testing.T) {
+	w := testkit.New(t)
+	alice := w.AddUser(100, "alice")
+	w.S21.SetUser("alice_login", "p", s21.Profile{Login: "alice_login", CampusID: "kazan", CampusName: "Kazan", CoalitionName: "Terra"})
+
+	w.SendDM(alice, "/admin alice_login:p")
+	w.AssertReplyContains("admin for Kazan")
+	w.AssertReplyContains("automatically")
+
+	u, err := w.Store.Users().Get(w.Ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.S21Nickname != "alice_login" {
+		t.Errorf("nickname not auto-set: %q", u.S21Nickname)
+	}
+	if u.NicknameStatus != models.NicknameStatusProvided {
+		t.Errorf("nickname_status: %q", u.NicknameStatus)
+	}
+	if u.VerifiedBy != models.VerifiedByAuth {
+		t.Errorf("verified_by: %q want %q", u.VerifiedBy, models.VerifiedByAuth)
+	}
+	if u.CoalitionName != "Terra" {
+		t.Errorf("coalition: %q", u.CoalitionName)
+	}
+}
+
+func TestAdminLoginRotationUpdatesNickname(t *testing.T) {
+	w := testkit.New(t)
+	alice := w.AddUser(100, "alice").MakeAdmin("old_login", "p", "kazan", "Kazan")
+	// Rotate to a new login (same campus).
+	w.S21.SetUser("new_login", "p2", s21.Profile{Login: "new_login", CampusID: "kazan", CampusName: "Kazan"})
+	w.S21.SetAdminPassword("new_login", "p2")
+
+	w.SendDM(alice, "/admin new_login:p2")
+	u, _ := w.Store.Users().Get(w.Ctx, 100)
+	if u.S21Nickname != "new_login" {
+		t.Errorf("rotated nickname: %q", u.S21Nickname)
+	}
+	if u.VerifiedBy != models.VerifiedByAuth {
+		t.Errorf("verified_by after rotation: %q", u.VerifiedBy)
+	}
+}
+
+func TestProvideNicknameRejectedForAdmin(t *testing.T) {
+	w := testkit.New(t)
+	alice := w.AddUser(100, "alice").MakeAdmin("alice_login", "p", "kazan", "Kazan")
+	w.SendDM(alice, "/provide_nickname some_other_nick")
+	w.AssertReplyContains("You're an admin")
+	// Nickname must not change.
+	u, _ := w.Store.Users().Get(w.Ctx, 100)
+	if u.S21Nickname == "some_other_nick" {
+		t.Error("admin nickname was overwritten")
+	}
+}
+
+func TestRemoveNicknameRejectedForAdmin(t *testing.T) {
+	w := testkit.New(t)
+	alice := w.AddUser(100, "alice").MakeAdmin("alice_login", "p", "kazan", "Kazan")
+	w.SendDM(alice, "/remove_nickname")
+	w.AssertReplyContains("You're an admin")
+	u, _ := w.Store.Users().Get(w.Ctx, 100)
+	if u.NicknameStatus != models.NicknameStatusProvided {
+		t.Errorf("admin nickname was cleared: %+v", u)
+	}
+}
+
+// ---------- /set_stats_topic posts placeholders ----------------------
+
+func TestSetStatsTopicPostsPlaceholders(t *testing.T) {
+	w := testkit.New(t)
+	admin := w.AddUser(50, "admin01").MakeAdmin("a_login", "pw", "kazan", "Kazan")
+	groupID := int64(-1001)
+	// Register the group first.
+	w.SendInGroup(testkit.Group{W: w, GroupID: groupID}, admin, 0, "/bot_register_group")
+	w.ResetMessenger()
+	w.SendInGroup(testkit.Group{W: w, GroupID: groupID}, admin, 5, "/set_matches_topic")
+	w.ResetMessenger()
+	w.SendInGroup(testkit.Group{W: w, GroupID: groupID}, admin, 7, "/set_stats_topic")
+
+	// Expect: SendMessage(rankings) + PinMessage + SendMessage(stats) + PinMessage + reply.
+	sends := w.Messen.CallsByMethod("SendMessage")
+	if len(sends) < 3 {
+		t.Fatalf("expected >=3 SendMessage calls (rankings, stats, reply), got %d:\n%s", len(sends), w.Messen.Pretty())
+	}
+	pins := w.Messen.CallsByMethod("PinMessage")
+	if len(pins) != 2 {
+		t.Errorf("expected 2 pin calls, got %d", len(pins))
+	}
+	g, _ := w.Store.Groups().Get(w.Ctx, groupID)
+	if g.RankingsMessageID == 0 || g.StatsMessageID == 0 {
+		t.Errorf("placeholder IDs not stored: %+v", g)
+	}
+}
+
+// ---------- Admin participant Confirm auto-approves ------------------
+
+func TestAdminParticipantConfirmAutoApproves(t *testing.T) {
+	w := testkit.New(t)
+	admin := w.AddUser(50, "admin01").MakeAdmin("a_login", "pw", "kazan", "Kazan")
+	g := w.AddConfiguredGroup(-1001, "kazan", "Kazan", admin.TelegramID, 5, 7)
+	alice := w.AddUser(100, "alice").SetNickname("alice_s21", "kazan", "Kazan", true)
+	g = g.AddPlayer(alice.TelegramID).AddPlayer(admin.TelegramID)
+
+	// Non-admin alice creates match: alice vs admin.
+	w.SendInGroup(g, alice, 5, "/match @admin01 3-1")
+	keyboardMsg := w.Messen.CallsByMethod("SendKeyboard")
+	if len(keyboardMsg) == 0 {
+		t.Fatalf("no SendKeyboard:\n%s", w.Messen.Pretty())
+	}
+	cbConfirm := keyboardMsg[0].Buttons[0].Callback
+
+	w.ResetMessenger()
+	// Admin taps confirm — should immediately approve, even though only one
+	// confirmation has been recorded (admin's). Author alice was pre-confirmed
+	// but admin's tap alone is the approval.
+	w.TapButton(g, admin, cbConfirm, 1)
+
+	m, err := w.Store.Matches().Get(w.Ctx, g.GroupID, 1)
+	if err != nil || m.Status != models.MatchStatusApproved {
+		t.Errorf("admin tap should approve, got status=%v err=%v", m.Status, err)
+	}
+}
+
 // Guard: dispatcher should not panic on private chats with unrelated text.
 func TestDispatcherIgnoresUnknownText(t *testing.T) {
 	w := testkit.New(t)

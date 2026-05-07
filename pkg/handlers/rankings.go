@@ -118,7 +118,7 @@ func (h *Handlers) renderRankings(ctx context.Context, g models.Group) (string, 
 		return "", err
 	}
 	if len(pr) == 0 {
-		return "No verified matches yet.", nil
+		return "Rankings\n\nNo verified matches yet. Once two verified players play and approve a match, this list updates automatically.", nil
 	}
 	order := rating.Sorted(pr)
 	if len(order) > MaxRankings {
@@ -140,7 +140,7 @@ func (h *Handlers) renderStatsAll(ctx context.Context, g models.Group) (string, 
 		return "", err
 	}
 	if len(pr) == 0 {
-		return "No verified matches yet.", nil
+		return "Stats\n\nNo verified matches yet. Per-player stats will appear here once verified players approve their first match.", nil
 	}
 	order := rating.Sorted(pr)
 	if len(order) > MaxRankings {

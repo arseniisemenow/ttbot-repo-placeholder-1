@@ -46,6 +46,10 @@ func (h *Handlers) handleProvideNickname(ctx context.Context, m *messenger.Messa
 	if err := h.captureDMChatID(ctx, m); err != nil {
 		return err
 	}
+	// Admins' nickname is bound to their /admin credentials — refuse self-service.
+	if _, err := h.Store.Admins().Get(ctx, m.From.ID); err == nil {
+		return h.reply(ctx, m, "You're an admin; your nickname is bound to your /admin credentials. Re-run /admin <login>:<password> to change it.")
+	}
 	args = strings.TrimSpace(args)
 	if args == "" {
 		return h.reply(ctx, m, "Usage: /provide_nickname <s21_nickname>")
@@ -137,6 +141,10 @@ func (h *Handlers) handleProvideNickname(ctx context.Context, m *messenger.Messa
 func (h *Handlers) handleRemoveNickname(ctx context.Context, m *messenger.Message) error {
 	if err := h.captureDMChatID(ctx, m); err != nil {
 		return err
+	}
+	// Admins' nickname is bound to /admin credentials — refuse self-service.
+	if _, err := h.Store.Admins().Get(ctx, m.From.ID); err == nil {
+		return h.reply(ctx, m, "You're an admin; your nickname is bound to your /admin credentials and cannot be removed without losing the admin role.")
 	}
 	user, err := h.Store.Users().Get(ctx, m.From.ID)
 	if err != nil {

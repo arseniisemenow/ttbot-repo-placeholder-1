@@ -56,7 +56,10 @@ func (h *Handlers) handleSetMatchesTopic(ctx context.Context, m *messenger.Messa
 	return h.reply(ctx, m, "Matches topic set. /match and /undo will be accepted here.")
 }
 
-// handleSetStatsTopic stores the current topic ID as the stats topic.
+// handleSetStatsTopic stores the current topic ID as the stats topic and
+// immediately posts empty placeholder rankings + stats messages so the topic
+// is visibly bound from day one. Subsequent rating-affecting events edit
+// these messages in place.
 func (h *Handlers) handleSetStatsTopic(ctx context.Context, m *messenger.Message) error {
 	g, err := h.assertGroupAdmin(ctx, m)
 	if err != nil {
@@ -66,11 +69,19 @@ func (h *Handlers) handleSetStatsTopic(ctx context.Context, m *messenger.Message
 		return h.reply(ctx, m, "Run this command inside the topic you want to use as the stats topic.")
 	}
 	g.StatsTopicID = m.MessageThreadID
+	// If the topic is being changed, drop stale message-IDs so we re-post.
+	g.RankingsMessageID = 0
+	g.StatsMessageID = 0
 	if err := h.Store.Groups().Upsert(ctx, g); err != nil {
 		return err
 	}
+
+	// Post placeholders. refreshStatsTopic will fill them in if any rating
+	// data exists; otherwise the placeholder text stays.
+	_ = h.refreshStatsTopic(ctx, g)
+
 	return h.reply(ctx, m,
-		"Stats topic set. I will post and continuously update rankings and stats here. "+
+		"Stats topic set. I posted rankings and stats messages here — they update automatically on every match.\n"+
 			"Tip: restrict 'Send messages' permission in this topic so only admins/bots can post.")
 }
 

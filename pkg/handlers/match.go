@@ -195,6 +195,18 @@ func (h *Handlers) handleConfirmTap(ctx context.Context, q *messenger.CallbackQu
 		TelegramID:  q.From.ID,
 		ConfirmedAt: h.Config.Now(),
 	})
+
+	g, _ := h.Store.Groups().Get(ctx, gid)
+	// Admin participant: a single tap from this group's campus admin
+	// auto-approves the match, no matter what the other player has done.
+	if isCampusAdmin(ctx, h, q.From.ID, g.CampusID) {
+		_ = h.Store.Matches().UpdateStatus(ctx, gid, mid, models.MatchStatusApproved)
+		_ = h.M.EditKeyboard(ctx, q.Message.Chat.ID, q.Message.MessageID,
+			renderApproved(match), nil)
+		_ = h.refreshStatsTopic(ctx, g)
+		return h.M.AnswerCallback(ctx, q.ID, "Approved by admin")
+	}
+
 	confs, _ := h.Store.MatchConfirmations().ListForMatch(ctx, gid, mid)
 	confirmedSet := map[int64]bool{}
 	for _, c := range confs {
@@ -205,7 +217,6 @@ func (h *Handlers) handleConfirmTap(ctx context.Context, q *messenger.CallbackQu
 		_ = h.Store.Matches().UpdateStatus(ctx, gid, mid, models.MatchStatusApproved)
 		_ = h.M.EditKeyboard(ctx, q.Message.Chat.ID, q.Message.MessageID,
 			renderApproved(match), nil)
-		g, _ := h.Store.Groups().Get(ctx, gid)
 		_ = h.refreshStatsTopic(ctx, g)
 		return h.M.AnswerCallback(ctx, q.ID, "Confirmed")
 	}
@@ -251,6 +262,17 @@ func (h *Handlers) handleCancelTap(ctx context.Context, q *messenger.CallbackQue
 func renderApproved(m models.Match) string {
 	return fmt.Sprintf("Match #%d confirmed. p1=%d vs p2=%d. Score %d-%d.",
 		m.MatchID, m.Player1ID, m.Player2ID, m.Player1Score, m.Player2Score)
+}
+
+// isCampusAdmin reports whether userID is the registered campus admin for the
+// given campus. Used by /undo (already has its own check) and by Confirm
+// button taps to grant single-tap approval authority.
+func isCampusAdmin(ctx context.Context, h *Handlers, userID int64, campusID string) bool {
+	a, err := h.Store.Admins().Get(ctx, userID)
+	if err != nil {
+		return false
+	}
+	return a.CampusID == campusID
 }
 
 func parseGroupMatchPayload(s string) (int64, uint64, bool) {
