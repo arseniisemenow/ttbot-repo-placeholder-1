@@ -431,17 +431,18 @@ func TestSetStatsTopicPostsPlaceholders(t *testing.T) {
 	w.ResetMessenger()
 	w.SendInGroup(testkit.Group{W: w, GroupID: groupID}, admin, 7, "/set_stats_topic")
 
-	// Expect: SendMessage(rankings) + PinMessage + SendMessage(stats) + PinMessage + reply.
+	// Expect 4 placeholder SendMessage calls (ELO rankings, Glicko rankings,
+	// ELO stats, Glicko stats) + the user-facing reply, and 4 pin calls.
 	sends := w.Messen.CallsByMethod("SendMessage")
-	if len(sends) < 3 {
-		t.Fatalf("expected >=3 SendMessage calls (rankings, stats, reply), got %d:\n%s", len(sends), w.Messen.Pretty())
+	if len(sends) < 5 {
+		t.Fatalf("expected >=5 SendMessage calls (4 placeholders + reply), got %d:\n%s", len(sends), w.Messen.Pretty())
 	}
 	pins := w.Messen.CallsByMethod("PinMessage")
-	if len(pins) != 2 {
-		t.Errorf("expected 2 pin calls, got %d", len(pins))
+	if len(pins) != 4 {
+		t.Errorf("expected 4 pin calls, got %d", len(pins))
 	}
 	g, _ := w.Store.Groups().Get(w.Ctx, groupID)
-	if g.RankingsMessageID == 0 || g.StatsMessageID == 0 {
+	if g.RankingsELOMessageID == 0 || g.RankingsGlickoMessageID == 0 || g.StatsELOMessageID == 0 || g.StatsGlickoMessageID == 0 {
 		t.Errorf("placeholder IDs not stored: %+v", g)
 	}
 }

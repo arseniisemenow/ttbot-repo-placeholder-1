@@ -592,6 +592,7 @@ func scanGroup(res interface {
 	var gid uint64
 	var adminID uint64
 	var matchesTopic, statsTopic, rankingsMsg, statsMsg *uint64
+	var rankingsELO, rankingsGlicko, statsELO, statsGlicko *uint64
 	var timeout *uint32
 	err := res.ScanNamed(
 		named.Required("group_id", &gid),
@@ -602,6 +603,10 @@ func scanGroup(res interface {
 		named.Optional("stats_topic_id", &statsTopic),
 		named.Optional("rankings_message_id", &rankingsMsg),
 		named.Optional("stats_message_id", &statsMsg),
+		named.Optional("rankings_elo_message_id", &rankingsELO),
+		named.Optional("rankings_glicko_message_id", &rankingsGlicko),
+		named.Optional("stats_elo_message_id", &statsELO),
+		named.Optional("stats_glicko_message_id", &statsGlicko),
 		named.Optional("confirmation_timeout_hours", &timeout),
 		named.Required("created_at", &g.CreatedAt),
 	)
@@ -621,6 +626,18 @@ func scanGroup(res interface {
 	}
 	if statsMsg != nil {
 		g.StatsMessageID = int64(*statsMsg)
+	}
+	if rankingsELO != nil {
+		g.RankingsELOMessageID = int64(*rankingsELO)
+	}
+	if rankingsGlicko != nil {
+		g.RankingsGlickoMessageID = int64(*rankingsGlicko)
+	}
+	if statsELO != nil {
+		g.StatsELOMessageID = int64(*statsELO)
+	}
+	if statsGlicko != nil {
+		g.StatsGlickoMessageID = int64(*statsGlicko)
 	}
 	if timeout != nil {
 		g.ConfirmationTimeoutHours = *timeout
@@ -682,10 +699,14 @@ DECLARE $matches_topic_id AS Uint64?;
 DECLARE $stats_topic_id AS Uint64?;
 DECLARE $rankings_message_id AS Uint64?;
 DECLARE $stats_message_id AS Uint64?;
+DECLARE $rankings_elo_message_id AS Uint64?;
+DECLARE $rankings_glicko_message_id AS Uint64?;
+DECLARE $stats_elo_message_id AS Uint64?;
+DECLARE $stats_glicko_message_id AS Uint64?;
 DECLARE $confirmation_timeout_hours AS Uint32?;
 DECLARE $created_at AS Timestamp;
-UPSERT INTO groups (group_id, campus_id, campus_name, admin_telegram_id, matches_topic_id, stats_topic_id, rankings_message_id, stats_message_id, confirmation_timeout_hours, created_at)
-VALUES ($group_id, $campus_id, $campus_name, $admin_telegram_id, $matches_topic_id, $stats_topic_id, $rankings_message_id, $stats_message_id, $confirmation_timeout_hours, $created_at);`
+UPSERT INTO groups (group_id, campus_id, campus_name, admin_telegram_id, matches_topic_id, stats_topic_id, rankings_message_id, stats_message_id, rankings_elo_message_id, rankings_glicko_message_id, stats_elo_message_id, stats_glicko_message_id, confirmation_timeout_hours, created_at)
+VALUES ($group_id, $campus_id, $campus_name, $admin_telegram_id, $matches_topic_id, $stats_topic_id, $rankings_message_id, $stats_message_id, $rankings_elo_message_id, $rankings_glicko_message_id, $stats_elo_message_id, $stats_glicko_message_id, $confirmation_timeout_hours, $created_at);`
 	return r.s.doTx(ctx, func(ctx context.Context, tx table.TransactionActor) error {
 		var timeoutVal types.Value
 		if g.ConfirmationTimeoutHours == 0 {
@@ -702,6 +723,10 @@ VALUES ($group_id, $campus_id, $campus_name, $admin_telegram_id, $matches_topic_
 			table.ValueParam("$stats_topic_id", optU64(g.StatsTopicID)),
 			table.ValueParam("$rankings_message_id", optU64(g.RankingsMessageID)),
 			table.ValueParam("$stats_message_id", optU64(g.StatsMessageID)),
+			table.ValueParam("$rankings_elo_message_id", optU64(g.RankingsELOMessageID)),
+			table.ValueParam("$rankings_glicko_message_id", optU64(g.RankingsGlickoMessageID)),
+			table.ValueParam("$stats_elo_message_id", optU64(g.StatsELOMessageID)),
+			table.ValueParam("$stats_glicko_message_id", optU64(g.StatsGlickoMessageID)),
 			table.ValueParam("$confirmation_timeout_hours", timeoutVal),
 			table.ValueParam("$created_at", types.TimestampValueFromTime(g.CreatedAt.UTC())),
 		))

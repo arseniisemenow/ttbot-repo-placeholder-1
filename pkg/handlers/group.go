@@ -72,6 +72,10 @@ func (h *Handlers) handleSetStatsTopic(ctx context.Context, m *messenger.Message
 	// If the topic is being changed, drop stale message-IDs so we re-post.
 	g.RankingsMessageID = 0
 	g.StatsMessageID = 0
+	g.RankingsELOMessageID = 0
+	g.RankingsGlickoMessageID = 0
+	g.StatsELOMessageID = 0
+	g.StatsGlickoMessageID = 0
 	if err := h.Store.Groups().Upsert(ctx, g); err != nil {
 		return err
 	}

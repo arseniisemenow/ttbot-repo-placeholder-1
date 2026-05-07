@@ -5,7 +5,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/crypto"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/notify"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/rating"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/store"
 )
@@ -166,26 +164,6 @@ func (h *Handlers) reply(ctx context.Context, m *messenger.Message, text string)
 	return err
 }
 
-// activeRatingEngine reads bot_settings or returns the configured default.
-// It also lazily seeds the row on first read so that subsequent toggles via
-// SettingsRepo.Set work uniformly.
-func (h *Handlers) activeRatingEngine(ctx context.Context) (rating.Engine, error) {
-	engineID := h.Config.RatingEngineDefault
-	if s, err := h.Store.Settings().Get(ctx, "rating_engine"); err == nil {
-		engineID = s.Value
-	}
-	periodDays := h.Config.RatingPeriodDaysDefault
-	if s, err := h.Store.Settings().Get(ctx, "rating_period_days"); err == nil {
-		var d int
-		_, _ = fmt.Sscanf(s.Value, "%d", &d)
-		if d > 0 {
-			periodDays = d
-		}
-	}
-	switch engineID {
-	case "glicko2":
-		return rating.NewGlicko2(periodDays), nil
-	default:
-		return rating.NewELO(), nil
-	}
-}
+// (Per-engine rendering is now handled by handlers/rankings.go's buildEngines.
+// The legacy single-engine selection via bot_settings.rating_engine is no
+// longer used — both engines are always rendered side by side.)

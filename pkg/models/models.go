@@ -103,8 +103,12 @@ type Group struct {
 	AdminTelegramID          int64
 	MatchesTopicID           int64 // 0 = unset
 	StatsTopicID             int64 // 0 = unset
-	RankingsMessageID        int64 // 0 = not posted yet
-	StatsMessageID           int64 // 0 = not posted yet
+	RankingsMessageID        int64 // DEPRECATED: legacy single-engine rankings message; superseded by per-engine fields below.
+	StatsMessageID           int64 // DEPRECATED: legacy single-engine stats message; superseded below.
+	RankingsELOMessageID     int64 // 0 = not posted yet
+	RankingsGlickoMessageID  int64 // 0 = not posted yet
+	StatsELOMessageID        int64 // 0 = not posted yet
+	StatsGlickoMessageID     int64 // 0 = not posted yet
 	ConfirmationTimeoutHours uint32
 	CreatedAt                time.Time
 }
