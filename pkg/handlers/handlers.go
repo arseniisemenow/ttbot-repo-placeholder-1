@@ -7,9 +7,11 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/crypto"
+	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/identity"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/notify"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
@@ -21,6 +23,9 @@ type Config struct {
 	RatingEngineDefault     string // "elo" or "glicko2" — seed for first read
 	RatingPeriodDaysDefault int
 	Now                     func() time.Time // injectable for tests; defaults to time.Now
+	// IdentityBaseURL is the identity-service base URL. /admin uses it to
+	// construct a fresh identity.Service after storing new admin creds.
+	IdentityBaseURL string
 }
 
 // Handlers holds all dependencies. Construct with New, then call Dispatch
@@ -32,6 +37,9 @@ type Handlers struct {
 	S21      s21.Client
 	Cipher   *crypto.Cipher
 	Config   Config
+
+	identityMu  sync.RWMutex
+	identitySvc *identity.Service
 }
 
 // New constructs Handlers.
@@ -53,6 +61,22 @@ func New(s store.Store, m messenger.Messenger, s21c s21.Client, cipher *crypto.C
 		Cipher:   cipher,
 		Config:   cfg,
 	}
+}
+
+// Identity returns the current identity-service client. Returns nil before
+// any admin has run /admin (no credentials yet).
+func (h *Handlers) Identity() *identity.Service {
+	h.identityMu.RLock()
+	defer h.identityMu.RUnlock()
+	return h.identitySvc
+}
+
+// SetIdentity replaces the identity-service client. Used by /admin after new
+// credentials are stored, and by the bootstrap path on the first cold start.
+func (h *Handlers) SetIdentity(svc *identity.Service) {
+	h.identityMu.Lock()
+	defer h.identityMu.Unlock()
+	h.identitySvc = svc
 }
 
 // Dispatch routes a single Telegram update through the command tree.
@@ -95,33 +119,13 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 		if isPrivate {
 			return h.handleStart(ctx, m)
 		}
-	case "/provide_nickname":
-		if isPrivate {
-			return h.handleProvideNickname(ctx, m, args)
-		}
-	case "/remove_nickname":
-		if isPrivate {
-			return h.handleRemoveNickname(ctx, m)
-		}
 	case "/admin":
 		if isPrivate {
 			return h.handleAdmin(ctx, m, args)
 		}
-	case "/provide_nickname_user":
+	case "/refresh_identity":
 		if isPrivate {
-			return h.handleProvideNicknameUser(ctx, m, args)
-		}
-	case "/verify_nickname":
-		if isPrivate {
-			return h.handleVerifyNickname(ctx, m, args)
-		}
-	case "/guest":
-		if isPrivate {
-			return h.handleGuest(ctx, m, args)
-		}
-	case "/list_users":
-		if isPrivate {
-			return h.handleListUsers(ctx, m)
+			return h.handleRefreshIdentity(ctx, m)
 		}
 	// --- Group config (any topic of registered supergroup) ---
 	case "/bot_register_group":
@@ -172,10 +176,6 @@ func (h *Handlers) reply(ctx context.Context, m *messenger.Message, text string)
 	return err
 }
 
-// (Per-engine rendering is now handled by handlers/rankings.go's buildEngines.
-// The legacy single-engine selection via bot_settings.rating_engine is no
-// longer used — both engines are always rendered side by side.)
-
 // deleteStatsTopicLitter inspects a freshly-received message and, if it
 // landed in a registered group's stats topic and is not one of the three
 // maintained messages, deletes it. Returns true when a deletion was attempted
@@ -191,7 +191,6 @@ func (h *Handlers) deleteStatsTopicLitter(ctx context.Context, m *messenger.Mess
 	if g.StatsTopicID == 0 || m.MessageThreadID != g.StatsTopicID {
 		return false
 	}
-	// Defensive: never touch the messages we maintain.
 	if m.MessageID == g.RankingsELOMessageID ||
 		m.MessageID == g.RankingsGlickoMessageID ||
 		m.MessageID == g.StatsMessageID {

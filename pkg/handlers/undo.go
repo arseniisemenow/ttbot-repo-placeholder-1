@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
@@ -41,12 +40,9 @@ func (h *Handlers) handleUndo(ctx context.Context, m *messenger.Message, args st
 		return h.reply(ctx, m, fmt.Sprintf("Match #%d not found in this group.", mid))
 	}
 
-	// Authorization: participant or campus admin.
+	// Authorization: participant or Telegram chat admin.
 	isParticipant := match.Player1ID == m.From.ID || match.Player2ID == m.From.ID
-	isAdmin := false
-	if a, err := h.Store.Admins().Get(ctx, m.From.ID); err == nil && a.CampusID == g.CampusID {
-		isAdmin = true
-	}
+	isAdmin := h.isChatAdmin(ctx, m.Chat.ID, m.From.ID)
 	if !isParticipant && !isAdmin {
 		return h.reply(ctx, m, "Error: Only match participants or group admins can undo matches.")
 	}
@@ -114,7 +110,3 @@ func (h *Handlers) toggleMatchAndAnnounce(ctx context.Context, m *messenger.Mess
 	return nil
 }
 
-// helper for tests / external callers
-func (h *Handlers) joinTokens(args ...string) string {
-	return strings.Join(args, " ")
-}

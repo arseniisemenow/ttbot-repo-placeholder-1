@@ -9,35 +9,50 @@ import (
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/store"
 )
 
-// handleBotRegisterGroup links a supergroup to the inviting admin's campus.
+// handleBotRegisterGroup links a supergroup. Authority is Telegram-chat
+// admin (creator/admin in the group itself); we no longer require an entry
+// in the admins table for this.
 func (h *Handlers) handleBotRegisterGroup(ctx context.Context, m *messenger.Message) error {
 	if !isSupergroup(m.Chat) {
 		return h.reply(ctx, m, "I only work in supergroups with forum topics enabled.")
 	}
-	admin, err := h.Store.Admins().Get(ctx, m.From.ID)
-	if err != nil {
-		return h.reply(ctx, m, "Only campus admins can configure the group.")
+	if !h.isChatAdmin(ctx, m.Chat.ID, m.From.ID) {
+		return h.reply(ctx, m, "Only group admins can configure the group.")
 	}
-	if existing, err := h.Store.Groups().GetByCampus(ctx, admin.CampusID); err == nil {
-		if existing.GroupID != m.Chat.ID {
-			return h.reply(ctx, m, admin.CampusName+" is already linked to another group.")
+	// Stamp campus name/id from any stored admin row (just for display in the
+	// group). Best-effort: empty strings are OK if no admin is registered yet.
+	var campusID, campusName string
+	if admins, _ := h.Store.Admins().List(ctx); len(admins) > 0 {
+		campusID = admins[0].CampusID
+		campusName = admins[0].CampusName
+	}
+	if existing, err := h.Store.Groups().Get(ctx, m.Chat.ID); err == nil {
+		existing.CampusID = campusID
+		existing.CampusName = campusName
+		_ = h.Store.Groups().Upsert(ctx, existing)
+		label := campusName
+		if label == "" {
+			label = "this group"
 		}
-		// Re-running on the same group is a no-op.
-		return h.reply(ctx, m, "Group is already linked to "+admin.CampusName+".")
+		return h.reply(ctx, m, "Group is already linked ("+label+").")
 	}
 	g := models.Group{
 		GroupID:                  m.Chat.ID,
-		CampusID:                 admin.CampusID,
-		CampusName:               admin.CampusName,
-		AdminTelegramID:          admin.TelegramID,
+		CampusID:                 campusID,
+		CampusName:               campusName,
+		AdminTelegramID:          m.From.ID,
 		ConfirmationTimeoutHours: 24,
 		CreatedAt:                h.Config.Now(),
 	}
 	if err := h.Store.Groups().Upsert(ctx, g); err != nil {
 		return err
 	}
+	label := campusName
+	if label == "" {
+		label = "ttbot"
+	}
 	return h.reply(ctx, m,
-		"Group linked to "+admin.CampusName+". Now run /set_matches_topic in the matches topic and /set_stats_topic in the read-only stats topic.")
+		"Group linked to "+label+". Now run /set_matches_topic in the matches topic and /set_stats_topic in the read-only stats topic.")
 }
 
 // handleSetMatchesTopic stores the current topic ID as the matches topic.
@@ -58,8 +73,7 @@ func (h *Handlers) handleSetMatchesTopic(ctx context.Context, m *messenger.Messa
 
 // handleSetStatsTopic stores the current topic ID as the stats topic and
 // immediately posts empty placeholder rankings + stats messages so the topic
-// is visibly bound from day one. Subsequent rating-affecting events edit
-// these messages in place.
+// is visibly bound from day one.
 func (h *Handlers) handleSetStatsTopic(ctx context.Context, m *messenger.Message) error {
 	g, err := h.assertGroupAdmin(ctx, m)
 	if err != nil {
@@ -69,72 +83,57 @@ func (h *Handlers) handleSetStatsTopic(ctx context.Context, m *messenger.Message
 		return h.reply(ctx, m, "Run this command inside the topic you want to use as the stats topic.")
 	}
 	g.StatsTopicID = m.MessageThreadID
-	// If the topic is being (re-)pointed, drop stale message-IDs. The next
-	// refreshStatsTopic creates fresh placeholders in the new topic. Any
-	// non-zero ID from before is treated as an orphan and deleted by refresh.
 	g.RankingsELOMessageID = 0
 	g.RankingsGlickoMessageID = 0
 	g.StatsMessageID = 0
-	// (Old per-engine stats fields are intentionally NOT zeroed here so the
-	//  next refresh can find and delete them as orphans.)
 	if err := h.Store.Groups().Upsert(ctx, g); err != nil {
 		return err
 	}
-
-	// Post placeholders. refreshStatsTopic will fill them in if any rating
-	// data exists; otherwise the placeholder text stays.
 	_ = h.refreshStatsTopic(ctx, g)
-
 	return h.reply(ctx, m,
 		"Stats topic set. I posted rankings and stats messages here — they update automatically on every match.\n"+
 			"Tip: restrict 'Send messages' permission in this topic so only admins/bots can post.")
 }
 
-// assertGroupAdmin returns the group row if the message comes from a registered
-// group whose campus admin matches the caller. Otherwise it sends an error
-// reply and returns store.ErrNotFound.
+// assertGroupAdmin returns the group row if the message comes from a
+// registered group whose chat-admin matches the caller. Otherwise it sends
+// an error reply and returns store.ErrNotFound.
 func (h *Handlers) assertGroupAdmin(ctx context.Context, m *messenger.Message) (models.Group, error) {
 	g, err := h.Store.Groups().Get(ctx, m.Chat.ID)
 	if err != nil {
-		_ = h.reply(ctx, m, "This group isn't linked to a campus yet. Admin: run /bot_register_group.")
+		_ = h.reply(ctx, m, "This group isn't linked yet. Admin: run /bot_register_group.")
 		return models.Group{}, store.ErrNotFound
 	}
-	admin, err := h.Store.Admins().Get(ctx, m.From.ID)
-	if err != nil || admin.CampusID != g.CampusID {
-		_ = h.reply(ctx, m, "Only campus admins can configure the group.")
+	if !h.isChatAdmin(ctx, m.Chat.ID, m.From.ID) {
+		_ = h.reply(ctx, m, "Only group admins can configure the group.")
 		return models.Group{}, store.ErrNotFound
 	}
 	return g, nil
 }
 
-// dispatchMyChatMember is fired when the bot itself is added/removed from a
-// chat. We use it to check that the chat is a supergroup with topics, and to
-// leave hostile/unsuitable chats.
+// dispatchMyChatMember handles bot-join/leave events.
 func (h *Handlers) dispatchMyChatMember(ctx context.Context, ev *messenger.ChatMemberUpdate) error {
 	if ev.NewChatMember == nil {
 		return nil
 	}
 	status := ev.NewChatMember.Status
 	if status != "member" && status != "administrator" {
-		return nil // leaving / kicked — nothing to do
+		return nil
 	}
 	if !isSupergroup(ev.Chat) {
 		_, _ = h.M.SendMessage(ctx, ev.Chat.ID, 0, "I only work in supergroups with forum topics enabled. Please enable Topics in group settings, or move me to a supergroup.")
 		return h.M.LeaveChat(ctx, ev.Chat.ID)
 	}
-	// If inviter is an admin, send the welcome message; else leave.
-	if ev.From != nil {
-		if _, err := h.Store.Admins().Get(ctx, ev.From.ID); err == nil {
-			_, _ = h.M.SendMessage(ctx, ev.Chat.ID, 0, "Hi! Use /bot_register_group to link this group to your campus, then /set_matches_topic and /set_stats_topic.")
-			return nil
-		}
-	}
-	_, _ = h.M.SendMessage(ctx, ev.Chat.ID, 0, "Only campus admins can configure me. Ask your campus admin to run /admin first.")
-	return h.M.LeaveChat(ctx, ev.Chat.ID)
+	// Welcome the inviter regardless of role; chat-admin authority is now
+	// checked at command time.
+	_, _ = h.M.SendMessage(ctx, ev.Chat.ID, 0,
+		"Hi! A group admin can run /bot_register_group here, then /set_matches_topic and /set_stats_topic inside the relevant topics.")
+	return nil
 }
 
 // dispatchChatMember is fired when a user joins/leaves a registered group.
-// On a fresh join, auto-activate the user as a player.
+// We track their username + activation here so /match @username can resolve
+// in the group.
 func (h *Handlers) dispatchChatMember(ctx context.Context, ev *messenger.ChatMemberUpdate) error {
 	if ev.NewChatMember == nil || ev.NewChatMember.User == nil {
 		return nil
@@ -143,7 +142,6 @@ func (h *Handlers) dispatchChatMember(ctx context.Context, ev *messenger.ChatMem
 	if newStatus != "member" && newStatus != "administrator" && newStatus != "creator" {
 		return nil
 	}
-	// Only act inside registered groups.
 	if _, err := h.Store.Groups().Get(ctx, ev.Chat.ID); err != nil {
 		return nil
 	}

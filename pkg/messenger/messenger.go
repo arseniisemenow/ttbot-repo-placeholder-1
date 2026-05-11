@@ -46,6 +46,12 @@ type Messenger interface {
 
 	// LeaveChat makes the bot leave a chat.
 	LeaveChat(ctx context.Context, chatID int64) error
+
+	// IsChatAdmin reports whether the given user is an administrator (or the
+	// creator) of the given chat. Used for group-config commands and
+	// match-flow auto-approve where "admin" is now Telegram-chat-admin, not
+	// a separately-stored campus admin role.
+	IsChatAdmin(ctx context.Context, chatID, userID int64) (bool, error)
 }
 
 // Button is a single inline-keyboard button.

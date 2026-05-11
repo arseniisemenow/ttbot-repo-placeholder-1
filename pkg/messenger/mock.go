@@ -21,11 +21,12 @@ type Call struct {
 // Mock is a Messenger that records every call. It also lets tests inject
 // failures and per-method message-ID counters.
 type Mock struct {
-	mu       sync.Mutex
-	calls    []Call
-	nextID   int64
-	failures map[string]error // method-name → error to return on next call
+	mu          sync.Mutex
+	calls       []Call
+	nextID      int64
+	failures    map[string]error // method-name → error to return on next call
 	failureChat map[string]int64 // optional chat-ID scoping for failures
+	chatAdmins  map[chatAdminKey]bool
 }
 
 // NewMock creates a fresh Mock with messageID counter starting at 1.
@@ -177,6 +178,33 @@ func (m *Mock) LeaveChat(ctx context.Context, chatID int64) error {
 	m.record(Call{Method: "LeaveChat", ChatID: chatID})
 	return m.maybeFail("LeaveChat", chatID)
 }
+
+// IsChatAdmin returns the value previously configured via SetChatAdmin (or
+// false if not set). Always records the call.
+func (m *Mock) IsChatAdmin(ctx context.Context, chatID, userID int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.record(Call{Method: "IsChatAdmin", ChatID: chatID, MessageID: userID})
+	if err := m.maybeFail("IsChatAdmin", chatID); err != nil {
+		return false, err
+	}
+	if m.chatAdmins == nil {
+		return false, nil
+	}
+	return m.chatAdmins[chatAdminKey{chatID, userID}], nil
+}
+
+// SetChatAdmin marks (chatID, userID) as admin in the mock.
+func (m *Mock) SetChatAdmin(chatID, userID int64, isAdmin bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.chatAdmins == nil {
+		m.chatAdmins = map[chatAdminKey]bool{}
+	}
+	m.chatAdmins[chatAdminKey{chatID, userID}] = isAdmin
+}
+
+type chatAdminKey struct{ Chat, User int64 }
 
 // Pretty returns a human-readable rendering of all calls, useful in test
 // failure messages.

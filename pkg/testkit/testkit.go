@@ -1,22 +1,28 @@
 // Package testkit is a high-level test framework for ttbot scenarios.
 //
-// Each scenario wires up a fresh memstore, a mock messenger, a mock S21, and
-// the real Handlers. Tests then drive user interactions through the World
-// helpers and assert on the recorded mock calls.
-//
-// This is a CUSTOM testing framework purpose-built for this bot. It is
-// supposed to be the only thing tests need to import (besides stdlib).
+// Each scenario wires up a fresh memstore, a mock messenger, a mock S21, a
+// fake identity-service HTTP server, and the real Handlers. Tests then drive
+// user interactions through the World helpers and assert on the recorded
+// mock calls.
 package testkit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/crypto"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/handlers"
+	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/identity"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
@@ -33,10 +39,13 @@ type World struct {
 	Cipher   *crypto.Cipher
 	Handlers *handlers.Handlers
 
+	// IdentityFake is an httptest server that emulates the identity service
+	// over the same HTTP wire protocol as the production SDK. Tests interact
+	// with it through (User).SetNickname / (World).IdentityHits.
+	IdentityFake *fakeIdentity
+
 	clock time.Time
 
-	// Sequence of message IDs allocated to inbound messages, so tests can
-	// reference them without manual bookkeeping.
 	nextMessageID int64
 }
 
@@ -50,20 +59,27 @@ func New(t *testing.T) *World {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fake := newFakeIdentity()
+	t.Cleanup(fake.Close)
+
 	w := &World{
-		T:      t,
-		Ctx:    context.Background(),
-		Store:  st,
-		Messen: mm,
-		S21:    sm,
-		Cipher: c,
-		clock:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		T:            t,
+		Ctx:          context.Background(),
+		Store:        st,
+		Messen:       mm,
+		S21:          sm,
+		Cipher:       c,
+		IdentityFake: fake,
+		clock:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 	w.Handlers = handlers.New(st, mm, sm, c, handlers.Config{
 		RatingEngineDefault:     "elo",
 		RatingPeriodDaysDefault: 1,
 		Now:                     w.now,
+		IdentityBaseURL:         fake.URL(),
 	})
+	// Preconfigure identity client so tests can SetNickname before any /admin runs.
+	w.Handlers.SetIdentity(identity.New(fake.URL(), "tk-login", "tk-password"))
 	return w
 }
 
@@ -75,6 +91,15 @@ func (w *World) Advance(d time.Duration) { w.clock = w.clock.Add(d) }
 // SetClock sets the test clock to an absolute time.
 func (w *World) SetClock(t time.Time) { w.clock = t }
 
+// IdentityFlushCache invalidates the identity-client cache so subsequent
+// lookups go back through the fake HTTP server. Mirrors the production
+// /refresh_identity behavior.
+func (w *World) IdentityFlushCache() {
+	if svc := w.Handlers.Identity(); svc != nil {
+		svc.Flush()
+	}
+}
+
 // allocMessageID picks a fresh message ID for the next inbound message.
 func (w *World) allocMessageID() int64 {
 	w.nextMessageID++
@@ -85,10 +110,10 @@ func (w *World) allocMessageID() int64 {
 
 // User adds a basic user row (no nickname). Returns it for further fluent calls.
 type User struct {
-	W            *World
-	TelegramID   int64
-	Username     string
-	IsBot        bool
+	W          *World
+	TelegramID int64
+	Username   string
+	IsBot      bool
 }
 
 // AddUser registers a user (memstore upsert).
@@ -105,31 +130,24 @@ func (w *World) AddUser(telegramID int64, username string) User {
 	return u
 }
 
-// SetNickname marks the user as nicknamed (provided + optionally verified).
-func (u User) SetNickname(s21Nickname, campusID, campusName string, verified bool) User {
-	row, _ := u.W.Store.Users().Get(u.W.Ctx, u.TelegramID)
-	row.S21Nickname = s21Nickname
-	row.CampusID = campusID
-	row.CampusName = campusName
-	row.NicknameStatus = models.NicknameStatusProvided
-	row.ProvidedBy = models.ProvidedBySelf
-	row.ProvidedAt = u.W.now()
-	if verified {
-		row.VerifiedBy = models.VerifiedByAdmin
-		row.VerifiedAt = u.W.now()
-	} else {
-		row.VerifiedBy = models.VerifiedByNone
-	}
-	if err := u.W.Store.Users().Upsert(u.W.Ctx, row); err != nil {
-		u.W.T.Fatal(err)
-	}
+// SetNickname binds the user's telegram_id → s21Nickname in the fake identity
+// service. This replaces the previous users-table side-effect approach.
+func (u User) SetNickname(s21Nickname, campusID, campusName string, _ bool) User {
+	u.W.IdentityFake.Put(identity.User{
+		TelegramID: u.TelegramID,
+		Nickname:   s21Nickname,
+		CampusID:   campusID,
+		CampusName: campusName,
+		Found:      true,
+	})
+	u.W.IdentityFlushCache()
 	return u
 }
 
-// MakeAdmin promotes the user to a campus admin (the S21 mock is configured
-// with the corresponding credentials). Also marks the underlying users row as
-// nicknamed-and-verified, since an authenticated S21 admin is by definition a
-// verified S21 user.
+// MakeAdmin promotes the user to a campus admin and writes the encrypted-creds
+// row to the admins table. Does NOT touch the identity service — admins'
+// "registered S21 user" status is independent of their admin role under the
+// new design.
 func (u User) MakeAdmin(login, password, campusID, campusName string) User {
 	u.W.S21.SetUser(login, password, s21.Profile{Login: login, CampusID: campusID, CampusName: campusName})
 	u.W.S21.SetAdminPassword(login, password)
@@ -144,7 +162,6 @@ func (u User) MakeAdmin(login, password, campusID, campusName string) User {
 	}); err != nil {
 		u.W.T.Fatal(err)
 	}
-	u.SetNickname(login, campusID, campusName, true)
 	return u
 }
 
@@ -172,7 +189,17 @@ func (w *World) AddConfiguredGroup(groupID int64, campusID, campusName string, a
 	if err := w.Store.Groups().Upsert(w.Ctx, g); err != nil {
 		w.T.Fatal(err)
 	}
+	// Whoever the test names as "the admin" is also a Telegram-chat admin in
+	// the mock messenger.
+	w.Messen.SetChatAdmin(groupID, adminTGID, true)
 	return Group{W: w, GroupID: groupID, CampusID: campusID, MatchesTopicID: matchesTopicID, StatsTopicID: statsTopicID}
+}
+
+// SetGroupAdmin marks a user as a Telegram-chat administrator of a group in
+// the mock messenger.
+func (g Group) SetGroupAdmin(u User, isAdmin bool) Group {
+	g.W.Messen.SetChatAdmin(g.GroupID, u.TelegramID, isAdmin)
+	return g
 }
 
 // AddPlayer activates a user in a group.
@@ -314,6 +341,136 @@ func (w *World) AssertNoReplies() {
 
 // ResetMessenger clears recorded calls (handy between scenario steps).
 func (w *World) ResetMessenger() { w.Messen.Reset() }
+
+// ---------- Fake identity HTTP server --------------------------------------
+
+// fakeIdentity is a minimal in-memory implementation of the identity service.
+// It speaks the same wire format as the production service so tests exercise
+// the real SDK (identityclient) over HTTP. Only the read endpoints used by
+// ttbot are implemented; writes return 405.
+type fakeIdentity struct {
+	server *httptest.Server
+
+	mu       sync.Mutex
+	byTID    map[int64]identity.User
+	hits     map[string]int // path → call count
+}
+
+// fakeUserDTO is the on-wire JSON shape expected by identityclient.
+type fakeUserDTO struct {
+	TelegramID    int64     `json:"telegram_id"`
+	Nickname      string    `json:"nickname"`
+	CampusID      string    `json:"campus_id"`
+	CampusName    string    `json:"campus_name"`
+	CoalitionName string    `json:"coalition_name"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func newFakeIdentity() *fakeIdentity {
+	f := &fakeIdentity{
+		byTID: map[int64]identity.User{},
+		hits:  map[string]int{},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/by_telegram/", f.handleByTelegram)
+	mux.HandleFunc("/users/by_nickname/", f.handleByNickname)
+	f.server = httptest.NewServer(mux)
+	return f
+}
+
+// URL returns the server base URL (no trailing slash).
+func (f *fakeIdentity) URL() string { return f.server.URL }
+
+// Close shuts the server down.
+func (f *fakeIdentity) Close() { f.server.Close() }
+
+// Put inserts/updates a record.
+func (f *fakeIdentity) Put(u identity.User) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.byTID[u.TelegramID] = u
+}
+
+// Hits returns a snapshot of per-endpoint hit counts.
+func (f *fakeIdentity) Hits() map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]int, len(f.hits))
+	for k, v := range f.hits {
+		out[k] = v
+	}
+	return out
+}
+
+func (f *fakeIdentity) bump(path string) {
+	f.mu.Lock()
+	f.hits[path]++
+	f.mu.Unlock()
+}
+
+func (f *fakeIdentity) handleByTelegram(w http.ResponseWriter, r *http.Request) {
+	f.bump("by_telegram")
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := strings.TrimPrefix(r.URL.Path, "/users/by_telegram/")
+	tid, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	f.mu.Lock()
+	u, ok := f.byTID[tid]
+	f.mu.Unlock()
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":"not_found","message":"not found"}`))
+		return
+	}
+	dto := fakeUserDTO{
+		TelegramID: u.TelegramID, Nickname: u.Nickname,
+		CampusID: u.CampusID, CampusName: u.CampusName, CoalitionName: u.CoalitionName,
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+func (f *fakeIdentity) handleByNickname(w http.ResponseWriter, r *http.Request) {
+	f.bump("by_nickname")
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	raw := strings.TrimPrefix(r.URL.Path, "/users/by_nickname/")
+	nick, err := url.PathUnescape(raw)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	f.mu.Lock()
+	var dtos []fakeUserDTO
+	for _, u := range f.byTID {
+		if strings.EqualFold(u.Nickname, nick) {
+			dtos = append(dtos, fakeUserDTO{
+				TelegramID: u.TelegramID, Nickname: u.Nickname,
+				CampusID: u.CampusID, CampusName: u.CampusName, CoalitionName: u.CoalitionName,
+			})
+		}
+	}
+	f.mu.Unlock()
+	// Deterministic ordering by telegram_id (test contract: pick "earliest").
+	sort.Slice(dtos, func(i, j int) bool { return dtos[i].TelegramID < dtos[j].TelegramID })
+	writeJSON(w, http.StatusOK, struct {
+		Users []fakeUserDTO `json:"users"`
+	}{Users: dtos})
+}
+
+func writeJSON(w http.ResponseWriter, code int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(body)
+}
 
 // ---------- Internal -------------------------------------------------------
 

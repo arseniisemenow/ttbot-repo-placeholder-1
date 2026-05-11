@@ -201,6 +201,21 @@ func (t *telegramAPI) LeaveChat(ctx context.Context, chatID int64) error {
 	return t.call(ctx, "leaveChat", map[string]any{"chat_id": chatID}, nil)
 }
 
+// IsChatAdmin calls Telegram's getChatMember and reports true when the
+// returned status is "creator" or "administrator".
+func (t *telegramAPI) IsChatAdmin(ctx context.Context, chatID, userID int64) (bool, error) {
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := t.call(ctx, "getChatMember", map[string]any{
+		"chat_id": chatID,
+		"user_id": userID,
+	}, &resp); err != nil {
+		return false, err
+	}
+	return resp.Status == "creator" || resp.Status == "administrator", nil
+}
+
 // Quick formatters used by the command-routing layer.
 
 // FormatChatID turns a chat ID into the form Telegram accepts.

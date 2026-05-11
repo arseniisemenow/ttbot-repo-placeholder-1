@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/arseniisemenow/ttbot-repo-placeholder-2 v0.1.0 // indirect
 	github.com/go-resty/resty/v2 v2.7.0 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect

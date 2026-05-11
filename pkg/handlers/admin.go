@@ -3,9 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
-	"fmt"
-	"time"
 
+	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/identity"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
@@ -13,10 +12,42 @@ import (
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/validation"
 )
 
-// handleAdmin authenticates a user as a campus admin (DM-only). On success
-// it also auto-promotes the caller's users row to a fully-verified S21 user
-// whose nickname is the authenticated login. Admins can not separately use
-// /provide_nickname or /remove_nickname (their identity is bound to /admin).
+// handleStart greets a DM user and captures their dm_chat_id.
+func (h *Handlers) handleStart(ctx context.Context, m *messenger.Message) error {
+	if err := h.captureDMChatID(ctx, m); err != nil {
+		return err
+	}
+	return h.reply(ctx, m,
+		"Hi! I track table-tennis matches at S21 campuses.\n"+
+			"To register your S21 nickname, talk to @school_21_identity_bot.\n"+
+			"If you administer a campus, run /admin <login:password> here.")
+}
+
+// captureDMChatID upserts a thin users-table row carrying telegram_id,
+// telegram_username, and dm_chat_id. Identity-related columns are no longer
+// touched here; identity now lives entirely in the identity service.
+func (h *Handlers) captureDMChatID(ctx context.Context, m *messenger.Message) error {
+	if m.From == nil {
+		return nil
+	}
+	user, err := h.Store.Users().Get(ctx, m.From.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	user.TelegramID = m.From.ID
+	user.TelegramUsername = m.From.Username
+	user.DMChatID = m.Chat.ID
+	if user.NicknameStatus == "" {
+		user.NicknameStatus = models.NicknameStatusNone
+	}
+	return h.Store.Users().Upsert(ctx, user)
+}
+
+// handleAdmin stores S21 admin credentials that ttbot will use to call the
+// identity service. Validation: parse login:password, attempt S21
+// Authenticate (fail-closed on bad creds), encrypt, upsert admins row keyed
+// by Telegram ID (last-wins on re-runs). On success, re-instantiates the
+// identity-service client with the fresh credentials.
 func (h *Handlers) handleAdmin(ctx context.Context, m *messenger.Message, args string) error {
 	if err := h.captureDMChatID(ctx, m); err != nil {
 		return err
@@ -32,53 +63,6 @@ func (h *Handlers) handleAdmin(ctx context.Context, m *messenger.Message, args s
 	case err != nil:
 		return err
 	}
-
-	now := h.Config.Now()
-
-	// Check whether this campus already has an admin (and it's not the caller).
-	if existing, err := h.Store.Admins().GetByCampus(ctx, profile.CampusID); err == nil {
-		if existing.TelegramID != m.From.ID {
-			text := profile.CampusName + " already has an admin"
-			// Try to surface the existing admin's Telegram identity so the
-			// caller can recognise / contact them.
-			existingUser, _ := h.Store.Users().Get(ctx, existing.TelegramID)
-			ident := ""
-			if existingUser.TelegramUsername != "" {
-				ident = "@" + existingUser.TelegramUsername
-			}
-			if existing.S21Login != "" {
-				if ident != "" {
-					ident += " (S21 login: " + existing.S21Login + ")"
-				} else {
-					ident = "S21 login: " + existing.S21Login
-				}
-			}
-			if ident != "" {
-				text += " — " + ident
-			}
-			text += fmt.Sprintf(", Telegram ID: %d.\n", existing.TelegramID)
-			text += "If that's not you, contact this person to decide who will be the admin. " +
-				"If it IS you using a different Telegram account, sign in with the original Telegram account and re-run /admin to rotate credentials."
-			return h.reply(ctx, m, text)
-		}
-		// Same admin — credential / login rotation path.
-		ct, err := h.Cipher.Encrypt(password)
-		if err != nil {
-			return err
-		}
-		existing.S21Login = login
-		existing.S21CredentialsEncrypted = ct
-		if err := h.Store.Admins().Upsert(ctx, existing); err != nil {
-			return err
-		}
-		// Refresh the users row so s21_nickname tracks the (possibly new) login.
-		if err := h.upsertAdminUserRow(ctx, m, login, profile, now); err != nil {
-			return err
-		}
-		return h.reply(ctx, m, "Credentials updated for "+profile.CampusName+".")
-	}
-
-	// New admin row.
 	ct, err := h.Cipher.Encrypt(password)
 	if err != nil {
 		return err
@@ -89,44 +73,26 @@ func (h *Handlers) handleAdmin(ctx context.Context, m *messenger.Message, args s
 		CampusName:              profile.CampusName,
 		S21Login:                login,
 		S21CredentialsEncrypted: ct,
-		CreatedAt:               now,
+		CreatedAt:               h.Config.Now(),
 	}
 	if err := h.Store.Admins().Upsert(ctx, admin); err != nil {
 		return err
 	}
-	if err := h.upsertAdminUserRow(ctx, m, login, profile, now); err != nil {
-		return err
+	if h.Config.IdentityBaseURL != "" {
+		h.SetIdentity(identity.New(h.Config.IdentityBaseURL, login, password))
 	}
-	return h.reply(ctx, m,
-		"You are now admin for "+profile.CampusName+".\n"+
-			"Your S21 nickname ("+login+") is registered and verified automatically — no separate /provide_nickname needed.\n\n"+
-			"Add me to a Telegram supergroup with topics enabled, then run:\n"+
-			"  /bot_register_group   (anywhere in the group)\n"+
-			"  /set_matches_topic    (inside the matches topic)\n"+
-			"  /set_stats_topic      (inside the read-only stats topic)")
+	return h.reply(ctx, m, "Credentials registered. ttbot will use them to call the identity service.")
 }
 
-// upsertAdminUserRow writes the caller's users row with the credential-derived
-// S21 nickname and verified_by=auth. Idempotent across re-runs of /admin.
-func (h *Handlers) upsertAdminUserRow(ctx context.Context, m *messenger.Message, login string, profile s21.Profile, now time.Time) error {
-	user, err := h.Store.Users().Get(ctx, m.From.ID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
+// handleRefreshIdentity is admin-only (DM-only): flushes the in-process
+// identity cache so the next /match or /rankings sees fresh data. Use after a
+// nickname change in @school_21_identity_bot.
+func (h *Handlers) handleRefreshIdentity(ctx context.Context, m *messenger.Message) error {
+	if _, err := h.Store.Admins().Get(ctx, m.From.ID); err != nil {
+		return h.reply(ctx, m, "Only admins can run /refresh_identity.")
 	}
-	user.TelegramID = m.From.ID
-	if m.From != nil && m.From.Username != "" {
-		user.TelegramUsername = m.From.Username
+	if svc := h.Identity(); svc != nil {
+		svc.Flush()
 	}
-	user.DMChatID = m.Chat.ID
-	user.S21Nickname = login
-	user.CampusID = profile.CampusID
-	user.CampusName = profile.CampusName
-	user.CoalitionName = profile.CoalitionName
-	user.NicknameStatus = models.NicknameStatusProvided
-	user.ProvidedBy = models.ProvidedBySelf
-	user.ProvidedAt = now
-	user.VerifiedBy = models.VerifiedByAuth
-	user.VerifiedAt = now
-	user.AdminTelegramID = m.From.ID
-	return h.Store.Users().Upsert(ctx, user)
+	return h.reply(ctx, m, "Cache flushed.")
 }
