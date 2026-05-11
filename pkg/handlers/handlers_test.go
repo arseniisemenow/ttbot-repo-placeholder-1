@@ -26,11 +26,6 @@ func TestAdminStoresCredentials(t *testing.T) {
 	if a.S21Login != "alice_login" || a.CampusID != "kazan" {
 		t.Errorf("admin row: %+v", a)
 	}
-	// /admin must NOT write identity-related columns to the users table.
-	u, _ := w.Store.Users().Get(w.Ctx, 100)
-	if u.S21Nickname != "" || u.VerifiedBy != "" || u.NicknameStatus != models.NicknameStatusNone {
-		t.Errorf("users row leaked identity columns: %+v", u)
-	}
 }
 
 func TestAdminInvalidCredentials(t *testing.T) {
@@ -435,8 +430,7 @@ func TestRefreshDeletesOrphanMessages(t *testing.T) {
 
 	alice := w.AddUser(100, "alice").SetNickname("alice_s21", "kazan", "Kazan", true)
 	bobby := w.AddUser(200, "bobby").SetNickname("bob_s21", "kazan", "Kazan", true)
-	_ = alice
-	_ = bobby
+	g = g.AddPlayer(alice.TelegramID).AddPlayer(bobby.TelegramID)
 	w.SendInGroup(g, testkit.User{W: w, TelegramID: admin.TelegramID, Username: "admin01"}, 5,
 		"/match @alice @bobby 3-1")
 

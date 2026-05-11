@@ -62,11 +62,11 @@ func (h *Handlers) handleStats(ctx context.Context, m *messenger.Message, args s
 			return h.reply(ctx, m, "Usage: /stats [@user|s21_nickname]")
 		}
 		if id.IsTelegram {
-			u, err := h.Store.Users().GetByTelegramUsername(ctx, id.Value)
+			p, err := h.Store.Participants().GetByUsername(ctx, g.GroupID, id.Value)
 			if err != nil {
 				return h.reply(ctx, m, "Player not in rankings yet.")
 			}
-			target = u.TelegramID
+			target = p.TelegramID
 		} else {
 			svc := h.Identity()
 			if svc == nil {
@@ -95,7 +95,7 @@ func (h *Handlers) handleStats(ctx context.Context, m *messenger.Message, args s
 	idStr := strconv.FormatInt(target, 10)
 	eloR, eloHas := eloPR[idStr]
 	glR, glHas := glPR[idStr]
-	display := h.displayFor(ctx, target, "")
+	display := h.displayFor(ctx, g.GroupID, target, "")
 	if !eloHas && !glHas {
 		return h.reply(ctx, m, fmt.Sprintf("%s\nMatches: 0 | Wins: 0 | Losses: 0 | Win Rate: — | No rated matches yet.", display))
 	}
@@ -173,7 +173,7 @@ func (h *Handlers) renderRankings(ctx context.Context, g models.Group, engine ra
 	for i, idStr := range order {
 		uid, _ := strconv.ParseInt(idStr, 10, 64)
 		r := pr[idStr]
-		display := h.displayFor(ctx, uid, "")
+		display := h.displayFor(ctx, g.GroupID, uid, "")
 		if r.Deviation > 0 {
 			sb.WriteString(fmt.Sprintf("%d. %s — %.0f (RD %.0f)\n", i+1, display, r.Rating, r.Deviation))
 		} else {
@@ -279,7 +279,7 @@ func (h *Handlers) renderCombinedStats(ctx context.Context, g models.Group, eloE
 	sb.WriteString("Stats\n")
 	for _, idStr := range order {
 		uid, _ := strconv.ParseInt(idStr, 10, 64)
-		display := h.displayFor(ctx, uid, "")
+		display := h.displayFor(ctx, g.GroupID, uid, "")
 		eloR := eloPR[idStr]
 		glR, hasGl := glPR[idStr]
 		wr := "—"

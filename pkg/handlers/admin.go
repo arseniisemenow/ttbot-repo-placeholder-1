@@ -8,39 +8,15 @@ import (
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/store"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/validation"
 )
 
-// handleStart greets a DM user and captures their dm_chat_id.
+// handleStart greets a DM user.
 func (h *Handlers) handleStart(ctx context.Context, m *messenger.Message) error {
-	if err := h.captureDMChatID(ctx, m); err != nil {
-		return err
-	}
 	return h.reply(ctx, m,
 		"Hi! I track table-tennis matches at S21 campuses.\n"+
 			"To register your S21 nickname, talk to @school_21_identity_bot.\n"+
 			"If you administer a campus, run /admin <login:password> here.")
-}
-
-// captureDMChatID upserts a thin users-table row carrying telegram_id,
-// telegram_username, and dm_chat_id. Identity-related columns are no longer
-// touched here; identity now lives entirely in the identity service.
-func (h *Handlers) captureDMChatID(ctx context.Context, m *messenger.Message) error {
-	if m.From == nil {
-		return nil
-	}
-	user, err := h.Store.Users().Get(ctx, m.From.ID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
-	}
-	user.TelegramID = m.From.ID
-	user.TelegramUsername = m.From.Username
-	user.DMChatID = m.Chat.ID
-	if user.NicknameStatus == "" {
-		user.NicknameStatus = models.NicknameStatusNone
-	}
-	return h.Store.Users().Upsert(ctx, user)
 }
 
 // handleAdmin stores S21 admin credentials that ttbot will use to call the
@@ -49,9 +25,6 @@ func (h *Handlers) captureDMChatID(ctx context.Context, m *messenger.Message) er
 // by Telegram ID (last-wins on re-runs). On success, re-instantiates the
 // identity-service client with the fresh credentials.
 func (h *Handlers) handleAdmin(ctx context.Context, m *messenger.Message, args string) error {
-	if err := h.captureDMChatID(ctx, m); err != nil {
-		return err
-	}
 	login, password, err := validation.ParseAdminCredentials(args)
 	if err != nil {
 		return h.reply(ctx, m, "Usage: /admin <login:password>")

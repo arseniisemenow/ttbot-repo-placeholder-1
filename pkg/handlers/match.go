@@ -59,13 +59,13 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 		// from the identity service (fallback to @username or "Player <id>").
 		p1 = matchPlayer{
 			TelegramID: m.From.ID,
-			Display:    h.displayFor(ctx, m.From.ID, m.From.Username),
+			Display:    h.displayFor(ctx, m.Chat.ID, m.From.ID, m.From.Username),
 		}
-		p2, err = h.resolveMatchToken(ctx, tokens[0])
+		p2, err = h.resolveMatchToken(ctx, m.Chat.ID, tokens[0])
 	case 3:
-		p1, err = h.resolveMatchToken(ctx, tokens[0])
+		p1, err = h.resolveMatchToken(ctx, m.Chat.ID, tokens[0])
 		if err == nil {
-			p2, err = h.resolveMatchToken(ctx, tokens[1])
+			p2, err = h.resolveMatchToken(ctx, m.Chat.ID, tokens[1])
 		}
 	}
 	if err != nil {
@@ -140,21 +140,23 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 
 // resolveMatchToken turns an @username or bare S21 nickname into a
 // matchPlayer (telegram_id + display name), or returns a user-facing error.
-func (h *Handlers) resolveMatchToken(ctx context.Context, token string) (matchPlayer, error) {
+//
+// `groupID` scopes the @username lookup to a single chat (Telegram has no
+// global username-to-id API; we cache (group_id, username) → telegram_id from
+// chat_member events).
+func (h *Handlers) resolveMatchToken(ctx context.Context, groupID int64, token string) (matchPlayer, error) {
 	id, err := validation.ParseIdentifier(token)
 	if err != nil {
 		return matchPlayer{}, fmt.Errorf("invalid identifier: %s", token)
 	}
 	if id.IsTelegram {
-		// Look up by global users table — populated when the user DM'd /start
-		// or joined a registered group.
-		u, err := h.Store.Users().GetByTelegramUsername(ctx, id.Value)
+		p, err := h.Store.Participants().GetByUsername(ctx, groupID, id.Value)
 		if err != nil {
-			return matchPlayer{}, fmt.Errorf("@%s is not known to me. Ask them to DM /start first.", id.Value)
+			return matchPlayer{}, fmt.Errorf("@%s is not known in this group. They need to join first (Telegram needs to send a chat_member event for the bot to see their username).", id.Value)
 		}
 		return matchPlayer{
-			TelegramID: u.TelegramID,
-			Display:    h.displayFor(ctx, u.TelegramID, id.Value),
+			TelegramID: p.TelegramID,
+			Display:    h.displayFor(ctx, groupID, p.TelegramID, id.Value),
 		}, nil
 	}
 	// Bare nickname → identity service.
@@ -184,8 +186,9 @@ func (h *Handlers) resolveMatchToken(ctx context.Context, token string) (matchPl
 }
 
 // displayFor returns the best human label for a telegram_id. Order: identity
-// nickname (if found), then @username (if non-empty), then "Player <id>".
-func (h *Handlers) displayFor(ctx context.Context, telegramID int64, fallbackUsername string) string {
+// nickname (if found), then @username (from the per-group participants
+// cache, or the supplied fallback), then "Player <id>".
+func (h *Handlers) displayFor(ctx context.Context, groupID, telegramID int64, fallbackUsername string) string {
 	if svc := h.Identity(); svc != nil {
 		if iu, err := svc.GetByTelegram(ctx, telegramID); err == nil && iu.Found {
 			return iu.Nickname
@@ -194,9 +197,8 @@ func (h *Handlers) displayFor(ctx context.Context, telegramID int64, fallbackUse
 	if fallbackUsername != "" {
 		return "@" + fallbackUsername
 	}
-	// Try users-table username.
-	if u, err := h.Store.Users().Get(ctx, telegramID); err == nil && u.TelegramUsername != "" {
-		return "@" + u.TelegramUsername
+	if p, err := h.Store.Participants().Get(ctx, groupID, telegramID); err == nil && p.TelegramUsername != "" {
+		return "@" + p.TelegramUsername
 	}
 	return fmt.Sprintf("Player %d", telegramID)
 }

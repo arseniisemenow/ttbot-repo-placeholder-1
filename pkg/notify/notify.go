@@ -1,18 +1,17 @@
-// Package notify implements two-step DM-or-group notifications. DM if
-// possible, otherwise post in the originating group's matches topic mentioning
-// @username.
+// Package notify posts user-facing notifications. DMs are no longer used;
+// every notification lands in the originating group's matches topic with an
+// @username mention when one is known.
 package notify
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
 )
 
-// Notifier sends DM-or-fallback messages.
+// Notifier sends group-targeted notifications.
 type Notifier struct {
 	M messenger.Messenger
 }
@@ -20,32 +19,20 @@ type Notifier struct {
 // New returns a Notifier wired to the given messenger.
 func New(m messenger.Messenger) *Notifier { return &Notifier{M: m} }
 
-// SendUser tries to DM the user via their dm_chat_id, falling back to the
-// fallback group's matches topic on failure.
+// SendInGroup posts `text` in the group's matches topic, prefixed with
+// `@username, ` when telegramUsername is non-empty.
 //
-//   - user: the recipient.
-//   - fallbackGroup: the group whose matches topic is used if DM fails. May be
-//     a zero Group, in which case fallback is skipped (and the original DM
-//     error returned).
-//   - text: the message body. The fallback prepends "@username, " (when known).
-func (n *Notifier) SendUser(ctx context.Context, user models.User, fallbackGroup models.Group, text string) error {
-	if user.DMChatID != 0 {
-		_, err := n.M.SendMessage(ctx, user.DMChatID, 0, text)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, messenger.ErrForbidden) && !errors.Is(err, messenger.ErrNotFound) {
-			return err
-		}
-		// Fall through to fallback.
-	}
-	if fallbackGroup.GroupID == 0 || fallbackGroup.MatchesTopicID == 0 {
-		return fmt.Errorf("notify: no DM and no fallback (user=%d)", user.TelegramID)
+// `telegramUsername` should come from the participants table when known. If
+// the group has no matches topic configured, the call is a no-op (returning
+// nil) — we'd have nowhere to post.
+func (n *Notifier) SendInGroup(ctx context.Context, group models.Group, telegramUsername, text string) error {
+	if group.GroupID == 0 || group.MatchesTopicID == 0 {
+		return fmt.Errorf("notify: group has no matches topic (group=%d)", group.GroupID)
 	}
 	prefix := ""
-	if user.TelegramUsername != "" {
-		prefix = "@" + user.TelegramUsername + ", "
+	if telegramUsername != "" {
+		prefix = "@" + telegramUsername + ", "
 	}
-	_, err := n.M.SendMessage(ctx, fallbackGroup.GroupID, fallbackGroup.MatchesTopicID, prefix+text)
+	_, err := n.M.SendMessage(ctx, group.GroupID, group.MatchesTopicID, prefix+text)
 	return err
 }

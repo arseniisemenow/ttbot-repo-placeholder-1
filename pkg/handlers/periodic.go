@@ -11,11 +11,10 @@ import (
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/store"
 )
 
-// PeriodicJob is the body of the ttbot-cron function. It deletes expired
-// pending matches and undo commands, sending the corresponding two-step
-// notifications. Notification is only sent by the transaction that actually
-// deleted the row (the memstore is single-locked so concurrent cron runs see
-// each row at most once).
+// PeriodicJob is the body of the ttbot-cron function. Deletes expired pending
+// matches and expired undo commands, posting one notification per deletion
+// into the matches topic of the originating group. Notification is only sent
+// by the transaction that actually deleted the row.
 func (h *Handlers) PeriodicJob(ctx context.Context) error {
 	if err := h.cleanExpiredMatches(ctx); err != nil {
 		log.Printf("periodic: matches: %v", err)
@@ -39,15 +38,13 @@ func (h *Handlers) cleanExpiredMatches(ctx context.Context) error {
 			return err
 		}
 		_ = h.Store.MatchConfirmations().DeleteForMatch(ctx, m.GroupID, m.MatchID)
-		// Notify reporter and players.
-		g, _ := h.Store.Groups().Get(ctx, m.GroupID)
+		g, gerr := h.Store.Groups().Get(ctx, m.GroupID)
+		if gerr != nil {
+			continue
+		}
 		text := fmt.Sprintf("Match #%d expired (no confirmation within timeout).", m.MatchID)
 		for _, uid := range uniqueIDs(m.RegisteredBy, m.Player1ID, m.Player2ID) {
-			user, err := h.Store.Users().Get(ctx, uid)
-			if err != nil {
-				continue
-			}
-			_ = h.Notifier.SendUser(ctx, user, g, text)
+			_ = h.Notifier.SendInGroup(ctx, g, h.participantUsername(ctx, m.GroupID, uid), text)
 		}
 	}
 	return nil
@@ -66,14 +63,23 @@ func (h *Handlers) cleanExpiredUndo(ctx context.Context) error {
 			}
 			return err
 		}
-		g, _ := h.Store.Groups().Get(ctx, u.GroupID)
-		user, err := h.Store.Users().Get(ctx, u.TelegramID)
-		if err != nil {
+		g, gerr := h.Store.Groups().Get(ctx, u.GroupID)
+		if gerr != nil {
 			continue
 		}
-		_ = h.Notifier.SendUser(ctx, user, g, fmt.Sprintf("Undo request for Match #%d expired.", u.MatchID))
+		_ = h.Notifier.SendInGroup(ctx, g, h.participantUsername(ctx, u.GroupID, u.TelegramID),
+			fmt.Sprintf("Undo request for Match #%d expired.", u.MatchID))
 	}
 	return nil
+}
+
+// participantUsername returns the cached @username for a (group, telegram)
+// pair, or "" when nothing is cached (the mention prefix is then omitted).
+func (h *Handlers) participantUsername(ctx context.Context, groupID, telegramID int64) string {
+	if p, err := h.Store.Participants().Get(ctx, groupID, telegramID); err == nil {
+		return p.TelegramUsername
+	}
+	return ""
 }
 
 func uniqueIDs(ids ...int64) []int64 {

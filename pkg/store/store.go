@@ -20,8 +20,7 @@ var ErrConflict = errors.New("store: conflict")
 // Store is the union of every repository the bot uses. Production code wires
 // up one implementation at startup.
 type Store interface {
-	Users() UserRepo
-	Players() PlayerRepo
+	Participants() ParticipantRepo
 	Admins() AdminRepo
 	Groups() GroupRepo
 	Matches() MatchRepo
@@ -37,22 +36,15 @@ type Store interface {
 	Close() error
 }
 
-// UserRepo persists global user identity.
-type UserRepo interface {
-	Get(ctx context.Context, telegramID int64) (models.User, error)
-	GetByTelegramUsername(ctx context.Context, username string) (models.User, error)
-	GetByS21Nickname(ctx context.Context, nickname string) (models.User, error)
-	Upsert(ctx context.Context, u models.User) error
-	// Reset clears nickname-related fields (used by /remove_nickname).
-	Reset(ctx context.Context, telegramID int64) error
-	List(ctx context.Context) ([]models.User, error)
-}
-
-// PlayerRepo persists per-group player activations.
-type PlayerRepo interface {
-	Get(ctx context.Context, groupID, telegramID int64) (models.Player, error)
-	Upsert(ctx context.Context, p models.Player) error
-	ListByGroup(ctx context.Context, groupID int64) ([]models.Player, error)
+// ParticipantRepo persists the per-group username cache used for /match
+// @username resolution. One row per (group_id, telegram_id) — same telegram
+// user in two groups produces two rows. Populated by Telegram chat_member
+// events and read by /match (and any other handler that needs a display
+// name when identity has no nickname).
+type ParticipantRepo interface {
+	Get(ctx context.Context, groupID, telegramID int64) (models.Participant, error)
+	GetByUsername(ctx context.Context, groupID int64, telegramUsername string) (models.Participant, error)
+	Upsert(ctx context.Context, p models.Participant) error
 }
 
 // AdminRepo persists campus admins.

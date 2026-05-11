@@ -19,8 +19,7 @@ import (
 type Store struct {
 	mu sync.Mutex
 
-	users         map[int64]models.User
-	players       map[playerKey]models.Player
+	participants  map[participantKey]models.Participant
 	admins        map[int64]models.Admin
 	groups        map[int64]models.Group
 	matches       map[matchKey]models.Match
@@ -30,7 +29,7 @@ type Store struct {
 	matchCounters map[int64]uint64
 }
 
-type playerKey struct{ Group, User int64 }
+type participantKey struct{ Group, User int64 }
 type matchKey struct {
 	Group int64
 	Match uint64
@@ -49,8 +48,7 @@ type undoKey struct {
 // New returns an empty memstore.
 func New() *Store {
 	return &Store{
-		users:         map[int64]models.User{},
-		players:       map[playerKey]models.Player{},
+		participants:  map[participantKey]models.Participant{},
 		admins:        map[int64]models.Admin{},
 		groups:        map[int64]models.Group{},
 		matches:       map[matchKey]models.Match{},
@@ -64,14 +62,13 @@ func New() *Store {
 // Close is a no-op.
 func (s *Store) Close() error { return nil }
 
-func (s *Store) Users() store.UserRepo                     { return userRepo{s} }
-func (s *Store) Players() store.PlayerRepo                 { return playerRepo{s} }
-func (s *Store) Admins() store.AdminRepo                   { return adminRepo{s} }
-func (s *Store) Groups() store.GroupRepo                   { return groupRepo{s} }
-func (s *Store) Matches() store.MatchRepo                  { return matchRepo{s} }
-func (s *Store) MatchConfirmations() store.MatchConfirmationRepo { return confirmRepo{s} }
-func (s *Store) UndoCommands() store.UndoRepo              { return undoRepo{s} }
-func (s *Store) Settings() store.SettingsRepo              { return settingsRepo{s} }
+func (s *Store) Participants() store.ParticipantRepo              { return participantRepo{s} }
+func (s *Store) Admins() store.AdminRepo                          { return adminRepo{s} }
+func (s *Store) Groups() store.GroupRepo                          { return groupRepo{s} }
+func (s *Store) Matches() store.MatchRepo                         { return matchRepo{s} }
+func (s *Store) MatchConfirmations() store.MatchConfirmationRepo  { return confirmRepo{s} }
+func (s *Store) UndoCommands() store.UndoRepo                     { return undoRepo{s} }
+func (s *Store) Settings() store.SettingsRepo                     { return settingsRepo{s} }
 
 // AllocateAndInsertMatch allocates the next match_id for the group, asks
 // `build` to populate the row, and inserts atomically.
@@ -86,113 +83,39 @@ func (s *Store) AllocateAndInsertMatch(ctx context.Context, groupID int64, build
 	return next, nil
 }
 
-// ---------- Users ---------------------------------------------------------
+// ---------- Participants --------------------------------------------------
 
-type userRepo struct{ s *Store }
+type participantRepo struct{ s *Store }
 
-func (r userRepo) Get(ctx context.Context, id int64) (models.User, error) {
+func (r participantRepo) Get(_ context.Context, gid, uid int64) (models.Participant, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	u, ok := r.s.users[id]
+	p, ok := r.s.participants[participantKey{gid, uid}]
 	if !ok {
-		return models.User{}, store.ErrNotFound
-	}
-	return u, nil
-}
-
-func (r userRepo) GetByTelegramUsername(ctx context.Context, username string) (models.User, error) {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	for _, u := range r.s.users {
-		if strings.EqualFold(u.TelegramUsername, username) {
-			return u, nil
-		}
-	}
-	return models.User{}, store.ErrNotFound
-}
-
-func (r userRepo) GetByS21Nickname(ctx context.Context, nick string) (models.User, error) {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	for _, u := range r.s.users {
-		if strings.EqualFold(u.S21Nickname, nick) {
-			return u, nil
-		}
-	}
-	return models.User{}, store.ErrNotFound
-}
-
-func (r userRepo) Upsert(ctx context.Context, u models.User) error {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	r.s.users[u.TelegramID] = u
-	return nil
-}
-
-func (r userRepo) Reset(ctx context.Context, id int64) error {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	u, ok := r.s.users[id]
-	if !ok {
-		return store.ErrNotFound
-	}
-	u.S21Nickname = ""
-	u.CampusID = ""
-	u.CampusName = ""
-	u.CoalitionName = ""
-	u.NicknameStatus = models.NicknameStatusNone
-	u.ProvidedBy = ""
-	u.ProvidedAt = time.Time{}
-	u.VerifiedBy = ""
-	u.VerifiedAt = time.Time{}
-	u.AdminTelegramID = 0
-	r.s.users[id] = u
-	return nil
-}
-
-func (r userRepo) List(ctx context.Context) ([]models.User, error) {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	out := make([]models.User, 0, len(r.s.users))
-	for _, u := range r.s.users {
-		out = append(out, u)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].TelegramID < out[j].TelegramID })
-	return out, nil
-}
-
-// ---------- Players -------------------------------------------------------
-
-type playerRepo struct{ s *Store }
-
-func (r playerRepo) Get(ctx context.Context, gid, uid int64) (models.Player, error) {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	p, ok := r.s.players[playerKey{gid, uid}]
-	if !ok {
-		return models.Player{}, store.ErrNotFound
+		return models.Participant{}, store.ErrNotFound
 	}
 	return p, nil
 }
 
-func (r playerRepo) Upsert(ctx context.Context, p models.Player) error {
+func (r participantRepo) GetByUsername(_ context.Context, gid int64, username string) (models.Participant, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.players[playerKey{p.GroupID, p.TelegramID}] = p
-	return nil
-}
-
-func (r playerRepo) ListByGroup(ctx context.Context, gid int64) ([]models.Player, error) {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	var out []models.Player
-	for k, p := range r.s.players {
-		if k.Group == gid {
-			out = append(out, p)
+	for k, p := range r.s.participants {
+		if k.Group != gid {
+			continue
+		}
+		if strings.EqualFold(p.TelegramUsername, username) {
+			return p, nil
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].TelegramID < out[j].TelegramID })
-	return out, nil
+	return models.Participant{}, store.ErrNotFound
+}
+
+func (r participantRepo) Upsert(_ context.Context, p models.Participant) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	r.s.participants[participantKey{p.GroupID, p.TelegramID}] = p
+	return nil
 }
 
 // ---------- Admins --------------------------------------------------------

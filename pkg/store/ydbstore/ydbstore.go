@@ -82,8 +82,7 @@ func optU64(v int64) types.Value {
 
 // ------------------------------------------------------------------- repos --
 
-func (s *Store) Users() store.UserRepo                          { return userRepo{s} }
-func (s *Store) Players() store.PlayerRepo                      { return playerRepo{s} }
+func (s *Store) Participants() store.ParticipantRepo            { return participantRepo{s} }
 func (s *Store) Admins() store.AdminRepo                        { return adminRepo{s} }
 func (s *Store) Groups() store.GroupRepo                        { return groupRepo{s} }
 func (s *Store) Matches() store.MatchRepo                       { return matchRepo{s} }
@@ -159,242 +158,44 @@ UPSERT INTO match_counters (group_id, next_match_id) VALUES ($group_id, $next);`
 	return allocated, err
 }
 
-// ----------------------------------------------------------------- users --
+// ----------------------------------------------------------- participants --
 
-type userRepo struct{ s *Store }
+type participantRepo struct{ s *Store }
 
-const userColsSel = `telegram_id, telegram_username, dm_chat_id, s21_nickname, campus_id, campus_name, coalition_name, nickname_status, provided_by, provided_at, verified_by, verified_at, admin_telegram_id`
-
-func scanUser(res interface {
+func scanParticipant(res interface {
 	ScanNamed(...named.Value) error
-}) (models.User, error) {
+}) (models.Participant, error) {
 	var (
-		u           models.User
-		tgUsername  *string
-		dmChatID    *uint64
-		s21nick     *string
-		campusID    *string
-		campusName  *string
-		coalition   *string
-		providedBy  *string
-		providedAt  *time.Time
-		verifiedBy  *string
-		verifiedAt  *time.Time
-		adminTGID   *uint64
-		nickStatus  string
-		telegramID  uint64
+		p   models.Participant
+		gid uint64
+		tid uint64
+		un  *string
+		at  time.Time
 	)
-	err := res.ScanNamed(
-		named.Required("telegram_id", &telegramID),
-		named.Optional("telegram_username", &tgUsername),
-		named.Optional("dm_chat_id", &dmChatID),
-		named.Optional("s21_nickname", &s21nick),
-		named.Optional("campus_id", &campusID),
-		named.Optional("campus_name", &campusName),
-		named.Optional("coalition_name", &coalition),
-		named.Required("nickname_status", &nickStatus),
-		named.Optional("provided_by", &providedBy),
-		named.Optional("provided_at", &providedAt),
-		named.Optional("verified_by", &verifiedBy),
-		named.Optional("verified_at", &verifiedAt),
-		named.Optional("admin_telegram_id", &adminTGID),
-	)
-	if err != nil {
-		return u, err
+	if err := res.ScanNamed(
+		named.Required("group_id", &gid),
+		named.Required("telegram_id", &tid),
+		named.Optional("telegram_username", &un),
+		named.Required("activated_at", &at),
+	); err != nil {
+		return p, err
 	}
-	u.TelegramID = int64(telegramID)
-	if tgUsername != nil {
-		u.TelegramUsername = *tgUsername
+	p.GroupID = int64(gid)
+	p.TelegramID = int64(tid)
+	if un != nil {
+		p.TelegramUsername = *un
 	}
-	if dmChatID != nil {
-		u.DMChatID = int64(*dmChatID)
-	}
-	if s21nick != nil {
-		u.S21Nickname = *s21nick
-	}
-	if campusID != nil {
-		u.CampusID = *campusID
-	}
-	if campusName != nil {
-		u.CampusName = *campusName
-	}
-	if coalition != nil {
-		u.CoalitionName = *coalition
-	}
-	u.NicknameStatus = models.NicknameStatus(nickStatus)
-	if providedBy != nil {
-		u.ProvidedBy = models.ProvidedBy(*providedBy)
-	}
-	if providedAt != nil {
-		u.ProvidedAt = *providedAt
-	}
-	if verifiedBy != nil {
-		u.VerifiedBy = models.VerifiedBy(*verifiedBy)
-	}
-	if verifiedAt != nil {
-		u.VerifiedAt = *verifiedAt
-	}
-	if adminTGID != nil {
-		u.AdminTelegramID = int64(*adminTGID)
-	}
-	return u, nil
+	p.ActivatedAt = at
+	return p, nil
 }
 
-func (r userRepo) Get(ctx context.Context, id int64) (models.User, error) {
-	var u models.User
+func (r participantRepo) Get(ctx context.Context, gid, uid int64) (models.Participant, error) {
+	var p models.Participant
 	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
 		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
-			"DECLARE $tid AS Uint64; SELECT "+userColsSel+" FROM users WHERE telegram_id = $tid;",
-			table.NewQueryParameters(table.ValueParam("$tid", types.Uint64Value(uint64(id)))))
-		if err != nil {
-			return err
-		}
-		defer res.Close()
-		if err := res.NextResultSetErr(ctx); err != nil {
-			return err
-		}
-		if !res.NextRow() {
-			return store.ErrNotFound
-		}
-		u, err = scanUser(res)
-		return err
-	})
-	return u, err
-}
-
-func (r userRepo) GetByTelegramUsername(ctx context.Context, username string) (models.User, error) {
-	var u models.User
-	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
-		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
-			"DECLARE $u AS Utf8; SELECT "+userColsSel+" FROM users WHERE telegram_username = $u LIMIT 1;",
-			table.NewQueryParameters(table.ValueParam("$u", types.UTF8Value(username))))
-		if err != nil {
-			return err
-		}
-		defer res.Close()
-		if err := res.NextResultSetErr(ctx); err != nil {
-			return err
-		}
-		if !res.NextRow() {
-			return store.ErrNotFound
-		}
-		u, err = scanUser(res)
-		return err
-	})
-	return u, err
-}
-
-func (r userRepo) GetByS21Nickname(ctx context.Context, nick string) (models.User, error) {
-	var u models.User
-	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
-		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
-			"DECLARE $n AS Utf8; SELECT "+userColsSel+" FROM users WHERE s21_nickname = $n LIMIT 1;",
-			table.NewQueryParameters(table.ValueParam("$n", types.UTF8Value(nick))))
-		if err != nil {
-			return err
-		}
-		defer res.Close()
-		if err := res.NextResultSetErr(ctx); err != nil {
-			return err
-		}
-		if !res.NextRow() {
-			return store.ErrNotFound
-		}
-		u, err = scanUser(res)
-		return err
-	})
-	return u, err
-}
-
-func (r userRepo) Upsert(ctx context.Context, u models.User) error {
-	if u.NicknameStatus == "" {
-		u.NicknameStatus = models.NicknameStatusNone
-	}
-	const sql = `
-DECLARE $telegram_id AS Uint64;
-DECLARE $telegram_username AS Utf8?;
-DECLARE $dm_chat_id AS Uint64?;
-DECLARE $s21_nickname AS Utf8?;
-DECLARE $campus_id AS Utf8?;
-DECLARE $campus_name AS Utf8?;
-DECLARE $coalition_name AS Utf8?;
-DECLARE $nickname_status AS Utf8;
-DECLARE $provided_by AS Utf8?;
-DECLARE $provided_at AS Timestamp?;
-DECLARE $verified_by AS Utf8?;
-DECLARE $verified_at AS Timestamp?;
-DECLARE $admin_telegram_id AS Uint64?;
-UPSERT INTO users (telegram_id, telegram_username, dm_chat_id, s21_nickname, campus_id, campus_name, coalition_name, nickname_status, provided_by, provided_at, verified_by, verified_at, admin_telegram_id)
-VALUES ($telegram_id, $telegram_username, $dm_chat_id, $s21_nickname, $campus_id, $campus_name, $coalition_name, $nickname_status, $provided_by, $provided_at, $verified_by, $verified_at, $admin_telegram_id);`
-	return r.s.doTx(ctx, func(ctx context.Context, tx table.TransactionActor) error {
-		_, err := tx.Execute(ctx, sql, table.NewQueryParameters(
-			table.ValueParam("$telegram_id", types.Uint64Value(uint64(u.TelegramID))),
-			table.ValueParam("$telegram_username", optStr(u.TelegramUsername)),
-			table.ValueParam("$dm_chat_id", optU64(u.DMChatID)),
-			table.ValueParam("$s21_nickname", optStr(u.S21Nickname)),
-			table.ValueParam("$campus_id", optStr(u.CampusID)),
-			table.ValueParam("$campus_name", optStr(u.CampusName)),
-			table.ValueParam("$coalition_name", optStr(u.CoalitionName)),
-			table.ValueParam("$nickname_status", types.UTF8Value(string(u.NicknameStatus))),
-			table.ValueParam("$provided_by", optStr(string(u.ProvidedBy))),
-			table.ValueParam("$provided_at", ts(u.ProvidedAt)),
-			table.ValueParam("$verified_by", optStr(string(u.VerifiedBy))),
-			table.ValueParam("$verified_at", ts(u.VerifiedAt)),
-			table.ValueParam("$admin_telegram_id", optU64(u.AdminTelegramID)),
-		))
-		return err
-	})
-}
-
-func (r userRepo) Reset(ctx context.Context, id int64) error {
-	const sql = `
-DECLARE $tid AS Uint64;
-UPDATE users SET
-  s21_nickname = NULL, campus_id = NULL, campus_name = NULL, coalition_name = NULL,
-  nickname_status = "none", provided_by = NULL, provided_at = NULL,
-  verified_by = NULL, verified_at = NULL, admin_telegram_id = NULL
-WHERE telegram_id = $tid;`
-	return r.s.doTx(ctx, func(ctx context.Context, tx table.TransactionActor) error {
-		_, err := tx.Execute(ctx, sql, table.NewQueryParameters(
-			table.ValueParam("$tid", types.Uint64Value(uint64(id))),
-		))
-		return err
-	})
-}
-
-func (r userRepo) List(ctx context.Context) ([]models.User, error) {
-	var out []models.User
-	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
-		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
-			"SELECT "+userColsSel+" FROM users;", nil)
-		if err != nil {
-			return err
-		}
-		defer res.Close()
-		if err := res.NextResultSetErr(ctx); err != nil {
-			return err
-		}
-		for res.NextRow() {
-			u, err := scanUser(res)
-			if err != nil {
-				return err
-			}
-			out = append(out, u)
-		}
-		return nil
-	})
-	return out, err
-}
-
-// --------------------------------------------------------------- players --
-
-type playerRepo struct{ s *Store }
-
-func (r playerRepo) Get(ctx context.Context, gid, uid int64) (models.Player, error) {
-	var p models.Player
-	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
-		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
-			"DECLARE $g AS Uint64; DECLARE $u AS Uint64; SELECT group_id, telegram_id, activated_at FROM players WHERE group_id = $g AND telegram_id = $u;",
+			`DECLARE $g AS Uint64; DECLARE $u AS Uint64;
+			 SELECT group_id, telegram_id, telegram_username, activated_at
+			 FROM participants WHERE group_id = $g AND telegram_id = $u;`,
 			table.NewQueryParameters(
 				table.ValueParam("$g", types.Uint64Value(uint64(gid))),
 				table.ValueParam("$u", types.Uint64Value(uint64(uid))),
@@ -409,41 +210,23 @@ func (r playerRepo) Get(ctx context.Context, gid, uid int64) (models.Player, err
 		if !res.NextRow() {
 			return store.ErrNotFound
 		}
-		var g, u uint64
-		if err := res.ScanNamed(
-			named.Required("group_id", &g),
-			named.Required("telegram_id", &u),
-			named.Required("activated_at", &p.ActivatedAt),
-		); err != nil {
-			return err
-		}
-		p.GroupID = int64(g)
-		p.TelegramID = int64(u)
-		return nil
+		p, err = scanParticipant(res)
+		return err
 	})
 	return p, err
 }
 
-func (r playerRepo) Upsert(ctx context.Context, p models.Player) error {
-	const sql = `
-DECLARE $g AS Uint64; DECLARE $u AS Uint64; DECLARE $t AS Timestamp;
-UPSERT INTO players (group_id, telegram_id, activated_at) VALUES ($g, $u, $t);`
-	return r.s.doTx(ctx, func(ctx context.Context, tx table.TransactionActor) error {
-		_, err := tx.Execute(ctx, sql, table.NewQueryParameters(
-			table.ValueParam("$g", types.Uint64Value(uint64(p.GroupID))),
-			table.ValueParam("$u", types.Uint64Value(uint64(p.TelegramID))),
-			table.ValueParam("$t", types.TimestampValueFromTime(p.ActivatedAt.UTC())),
-		))
-		return err
-	})
-}
-
-func (r playerRepo) ListByGroup(ctx context.Context, gid int64) ([]models.Player, error) {
-	var out []models.Player
+func (r participantRepo) GetByUsername(ctx context.Context, gid int64, username string) (models.Participant, error) {
+	var p models.Participant
 	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
 		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
-			"DECLARE $g AS Uint64; SELECT group_id, telegram_id, activated_at FROM players WHERE group_id = $g;",
-			table.NewQueryParameters(table.ValueParam("$g", types.Uint64Value(uint64(gid)))))
+			`DECLARE $g AS Uint64; DECLARE $u AS Utf8;
+			 SELECT group_id, telegram_id, telegram_username, activated_at
+			 FROM participants WHERE group_id = $g AND telegram_username = $u LIMIT 1;`,
+			table.NewQueryParameters(
+				table.ValueParam("$g", types.Uint64Value(uint64(gid))),
+				table.ValueParam("$u", types.UTF8Value(username)),
+			))
 		if err != nil {
 			return err
 		}
@@ -451,23 +234,38 @@ func (r playerRepo) ListByGroup(ctx context.Context, gid int64) ([]models.Player
 		if err := res.NextResultSetErr(ctx); err != nil {
 			return err
 		}
-		for res.NextRow() {
-			var p models.Player
-			var g, u uint64
-			if err := res.ScanNamed(
-				named.Required("group_id", &g),
-				named.Required("telegram_id", &u),
-				named.Required("activated_at", &p.ActivatedAt),
-			); err != nil {
-				return err
-			}
-			p.GroupID = int64(g)
-			p.TelegramID = int64(u)
-			out = append(out, p)
+		if !res.NextRow() {
+			return store.ErrNotFound
 		}
-		return nil
+		p, err = scanParticipant(res)
+		return err
 	})
-	return out, err
+	return p, err
+}
+
+func (r participantRepo) Upsert(ctx context.Context, p models.Participant) error {
+	const sql = `
+DECLARE $g AS Uint64;
+DECLARE $u AS Uint64;
+DECLARE $un AS Utf8?;
+DECLARE $at AS Timestamp;
+UPSERT INTO participants (group_id, telegram_id, telegram_username, activated_at)
+VALUES ($g, $u, $un, $at);`
+	var unameVal types.Value
+	if p.TelegramUsername == "" {
+		unameVal = types.NullValue(types.TypeUTF8)
+	} else {
+		unameVal = types.OptionalValue(types.UTF8Value(p.TelegramUsername))
+	}
+	return r.s.doTx(ctx, func(ctx context.Context, tx table.TransactionActor) error {
+		_, err := tx.Execute(ctx, sql, table.NewQueryParameters(
+			table.ValueParam("$g", types.Uint64Value(uint64(p.GroupID))),
+			table.ValueParam("$u", types.Uint64Value(uint64(p.TelegramID))),
+			table.ValueParam("$un", unameVal),
+			table.ValueParam("$at", types.TimestampValueFromTime(p.ActivatedAt.UTC())),
+		))
+		return err
+	})
 }
 
 // ---------------------------------------------------------------- admins --

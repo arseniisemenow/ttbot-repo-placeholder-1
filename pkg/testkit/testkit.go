@@ -47,6 +47,20 @@ type World struct {
 	clock time.Time
 
 	nextMessageID int64
+
+	// usernames remembers (telegram_id → username) for AddUser callers so
+	// AddPlayer can stamp the right username on the participants row without
+	// the test needing to repeat itself.
+	usernames map[int64]string
+}
+
+// usernameFor returns the username recorded by the most recent AddUser call
+// for the given telegram_id, or "" when none.
+func (w *World) usernameFor(telegramID int64) string {
+	if w.usernames == nil {
+		return ""
+	}
+	return w.usernames[telegramID]
 }
 
 // New builds a fresh World.
@@ -116,18 +130,16 @@ type User struct {
 	IsBot      bool
 }
 
-// AddUser registers a user (memstore upsert).
+// AddUser registers a user in the world. Under the participants-only model
+// there is no global user row — this just records the (telegram_id,
+// username) for the test helpers; the per-group participants row is created
+// by Group.AddPlayer.
 func (w *World) AddUser(telegramID int64, username string) User {
-	u := User{W: w, TelegramID: telegramID, Username: username}
-	if err := w.Store.Users().Upsert(w.Ctx, models.User{
-		TelegramID:       telegramID,
-		TelegramUsername: username,
-		DMChatID:         telegramID,
-		NicknameStatus:   models.NicknameStatusNone,
-	}); err != nil {
-		w.T.Fatal(err)
+	if w.usernames == nil {
+		w.usernames = map[int64]string{}
 	}
-	return u
+	w.usernames[telegramID] = username
+	return User{W: w, TelegramID: telegramID, Username: username}
 }
 
 // SetNickname binds the user's telegram_id → s21Nickname in the fake identity
@@ -202,12 +214,17 @@ func (g Group) SetGroupAdmin(u User, isAdmin bool) Group {
 	return g
 }
 
-// AddPlayer activates a user in a group.
+// AddPlayer upserts the participants row for a user in this group. The
+// participant's username is looked up from the World's user table when the
+// helper has it; otherwise it's left empty (mirrors the production path
+// where chat_member events carry the username).
 func (g Group) AddPlayer(telegramID int64) Group {
-	if err := g.W.Store.Players().Upsert(g.W.Ctx, models.Player{
-		GroupID:     g.GroupID,
-		TelegramID:  telegramID,
-		ActivatedAt: g.W.now(),
+	username := g.W.usernameFor(telegramID)
+	if err := g.W.Store.Participants().Upsert(g.W.Ctx, models.Participant{
+		GroupID:          g.GroupID,
+		TelegramID:       telegramID,
+		TelegramUsername: username,
+		ActivatedAt:      g.W.now(),
 	}); err != nil {
 		g.W.T.Fatal(err)
 	}

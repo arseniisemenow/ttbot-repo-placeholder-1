@@ -3,32 +3,6 @@ package models
 
 import "time"
 
-// NicknameStatus is the lifecycle state of a user's identity.
-type NicknameStatus string
-
-const (
-	NicknameStatusNone     NicknameStatus = "none"
-	NicknameStatusProvided NicknameStatus = "nickname_provided"
-	NicknameStatusGuest    NicknameStatus = "guest"
-)
-
-// ProvidedBy is who supplied the nickname.
-type ProvidedBy string
-
-const (
-	ProvidedBySelf  ProvidedBy = "self"
-	ProvidedByAdmin ProvidedBy = "admin"
-)
-
-// VerifiedBy is who verified the S21 nickname.
-type VerifiedBy string
-
-const (
-	VerifiedByNone  VerifiedBy = "none"
-	VerifiedByAdmin VerifiedBy = "admin"
-	VerifiedByAuth  VerifiedBy = "auth"
-)
-
 // MatchStatus is a match's lifecycle state.
 type MatchStatus string
 
@@ -38,51 +12,20 @@ const (
 	MatchStatusUndone   MatchStatus = "UNDONE"
 )
 
-// User is the global users-table row.
-type User struct {
+// Participant is one row of the per-group username-cache table. Populated
+// from Telegram chat_member events when a user joins a registered group, and
+// consulted when /match @username needs to resolve telegram_username →
+// telegram_id within this group.
+//
+// Telegram has no public "get user by username" endpoint; this table is the
+// bot's only mechanism for `@alice` lookups in /match. It is intentionally
+// per-group scoped: the same @username may be claimed by different people in
+// different chats, and a single chat is a stable disambiguation context.
+type Participant struct {
+	GroupID          int64
 	TelegramID       int64
 	TelegramUsername string
-	DMChatID         int64
-	S21Nickname      string
-	CampusID         string
-	CampusName       string
-	CoalitionName    string // reserved for future use
-	NicknameStatus   NicknameStatus
-	ProvidedBy       ProvidedBy
-	ProvidedAt       time.Time
-	VerifiedBy       VerifiedBy
-	VerifiedAt       time.Time
-	AdminTelegramID  int64
-}
-
-// HasNickname reports whether the user is allowed to play (provided or guest).
-func (u User) HasNickname() bool {
-	return u.NicknameStatus == NicknameStatusProvided || u.NicknameStatus == NicknameStatusGuest
-}
-
-// IsVerified reports whether the user appears in rankings/stats.
-func (u User) IsVerified() bool {
-	return u.VerifiedBy != "" && u.VerifiedBy != VerifiedByNone
-}
-
-// DisplayName returns the rendering for any UI: S21 nickname for nicknamed users,
-// @telegram_username for guests. Falls back to the telegram username if neither
-// is set, then to a numeric ID.
-func (u User) DisplayName() string {
-	if u.NicknameStatus == NicknameStatusProvided && u.S21Nickname != "" {
-		return u.S21Nickname
-	}
-	if u.TelegramUsername != "" {
-		return "@" + u.TelegramUsername
-	}
-	return ""
-}
-
-// Player is the players-table row (per-group activation only).
-type Player struct {
-	GroupID     int64
-	TelegramID  int64
-	ActivatedAt time.Time
+	ActivatedAt      time.Time
 }
 
 // Admin is a campus admin with encrypted S21 credentials.

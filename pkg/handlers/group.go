@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
@@ -132,8 +131,8 @@ func (h *Handlers) dispatchMyChatMember(ctx context.Context, ev *messenger.ChatM
 }
 
 // dispatchChatMember is fired when a user joins/leaves a registered group.
-// We track their username + activation here so /match @username can resolve
-// in the group.
+// We upsert their participants row so that /match @username can resolve their
+// telegram_id inside this specific group.
 func (h *Handlers) dispatchChatMember(ctx context.Context, ev *messenger.ChatMemberUpdate) error {
 	if ev.NewChatMember == nil || ev.NewChatMember.User == nil {
 		return nil
@@ -146,24 +145,11 @@ func (h *Handlers) dispatchChatMember(ctx context.Context, ev *messenger.ChatMem
 		return nil
 	}
 	tgUser := ev.NewChatMember.User
-	user, err := h.Store.Users().Get(ctx, tgUser.ID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
-	}
-	user.TelegramID = tgUser.ID
-	if user.TelegramUsername == "" {
-		user.TelegramUsername = tgUser.Username
-	}
-	if user.NicknameStatus == "" {
-		user.NicknameStatus = models.NicknameStatusNone
-	}
-	if err := h.Store.Users().Upsert(ctx, user); err != nil {
-		return err
-	}
-	return h.Store.Players().Upsert(ctx, models.Player{
-		GroupID:     ev.Chat.ID,
-		TelegramID:  tgUser.ID,
-		ActivatedAt: h.Config.Now(),
+	return h.Store.Participants().Upsert(ctx, models.Participant{
+		GroupID:          ev.Chat.ID,
+		TelegramID:       tgUser.ID,
+		TelegramUsername: tgUser.Username,
+		ActivatedAt:      h.Config.Now(),
 	})
 }
 
