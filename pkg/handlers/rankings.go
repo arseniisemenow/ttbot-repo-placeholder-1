@@ -95,7 +95,7 @@ func (h *Handlers) handleStats(ctx context.Context, m *messenger.Message, args s
 	idStr := strconv.FormatInt(target, 10)
 	eloR, eloHas := eloPR[idStr]
 	glR, glHas := glPR[idStr]
-	display := h.displayFor(ctx, g.GroupID, target, "")
+	display := h.playerLabel(ctx, g.GroupID, target)
 	if !eloHas && !glHas {
 		return h.reply(ctx, m, fmt.Sprintf("%s\nMatches: 0 | Wins: 0 | Losses: 0 | Win Rate: — | No rated matches yet.", display))
 	}
@@ -173,7 +173,7 @@ func (h *Handlers) renderRankings(ctx context.Context, g models.Group, engine ra
 	for i, idStr := range order {
 		uid, _ := strconv.ParseInt(idStr, 10, 64)
 		r := pr[idStr]
-		display := h.displayFor(ctx, g.GroupID, uid, "")
+		display := h.playerLabel(ctx, g.GroupID, uid)
 		if r.Deviation > 0 {
 			sb.WriteString(fmt.Sprintf("%d. %s — %.0f (RD %.0f)\n", i+1, display, r.Rating, r.Deviation))
 		} else {
@@ -279,7 +279,7 @@ func (h *Handlers) renderCombinedStats(ctx context.Context, g models.Group, eloE
 	sb.WriteString("Stats\n")
 	for _, idStr := range order {
 		uid, _ := strconv.ParseInt(idStr, 10, 64)
-		display := h.displayFor(ctx, g.GroupID, uid, "")
+		display := h.playerLabel(ctx, g.GroupID, uid)
 		eloR := eloPR[idStr]
 		glR, hasGl := glPR[idStr]
 		wr := "—"
