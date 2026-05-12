@@ -14,7 +14,9 @@ const (
 
 // Participant is one row of the per-group username-cache table. Populated
 // from Telegram chat_member events when a user joins a registered group, and
-// consulted when /match @username needs to resolve telegram_username →
+// backfilled from any command the user runs in the group (so members who
+// pre-date the bot get captured the first time they run e.g. /ping).
+// Consulted when /match @username needs to resolve telegram_username →
 // telegram_id within this group.
 //
 // Telegram has no public "get user by username" endpoint; this table is the

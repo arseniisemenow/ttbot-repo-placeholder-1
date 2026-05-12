@@ -13,6 +13,7 @@ import (
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/crypto"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/identity"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/notify"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/store"
@@ -112,6 +113,10 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 	if cmd == "" {
 		return nil
 	}
+	// Any command typed in a registered group backfills the participants cache.
+	// Captures members who pre-date the bot (no chat_member event was emitted
+	// for them) — they get a row the first time they run any command.
+	h.upsertSenderParticipant(ctx, m)
 	isPrivate := m.Chat.Type == "private"
 	switch cmd {
 	// --- DM-only ---
@@ -143,8 +148,35 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 		return h.handleRankings(ctx, m)
 	case "/stats":
 		return h.handleStats(ctx, m, args)
+	case "/ping":
+		return h.handlePing(ctx, m)
 	}
 	return nil
+}
+
+// handlePing reacts to the caller's message with 👍. Its main purpose is to
+// give group members a zero-context way to register themselves with the bot:
+// upsertSenderParticipant has already run by the time we get here, so the row
+// is in the table before this reaction is sent.
+func (h *Handlers) handlePing(ctx context.Context, m *messenger.Message) error {
+	return h.M.SendReaction(ctx, m.Chat.ID, m.MessageID, "👍")
+}
+
+// upsertSenderParticipant records the message sender in the per-group
+// participants cache. No-op for DMs, unregistered groups, and bot accounts.
+func (h *Handlers) upsertSenderParticipant(ctx context.Context, m *messenger.Message) {
+	if m.Chat.Type == "private" || m.From == nil || m.From.IsBot {
+		return
+	}
+	if _, err := h.Store.Groups().Get(ctx, m.Chat.ID); err != nil {
+		return
+	}
+	_ = h.Store.Participants().Upsert(ctx, models.Participant{
+		GroupID:          m.Chat.ID,
+		TelegramID:       m.From.ID,
+		TelegramUsername: m.From.Username,
+		ActivatedAt:      h.Config.Now(),
+	})
 }
 
 // splitCommand returns ("/foo", "rest of args"). If the command has the @bot
