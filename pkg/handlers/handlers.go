@@ -111,8 +111,7 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 		}
 		if m.ForwardSenderName != "" {
 			return h.reply(ctx, m,
-				"This user has hidden their account on forwards — I can't read their telegram id from a DM.\n"+
-					"Workaround: in the group, reply to one of their messages and run /add.")
+				"This user has hidden their account on forwards — can't read their telegram id this way.")
 		}
 	}
 	// Stats topic is read-only by policy: the bot maintains exactly three
@@ -158,8 +157,6 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 		return h.handleSetStatsTopic(ctx, m)
 	case "/refresh_usernames":
 		return h.handleRefreshUsernames(ctx, m)
-	case "/add":
-		return h.handleAddParticipantCommand(ctx, m)
 	// --- Group, must be in matches topic ---
 	case "/match":
 		return h.handleMatch(ctx, m, args)

@@ -157,39 +157,3 @@ func groupDisplayName(g models.Group) string {
 	}
 	return fmt.Sprintf("Group %d", g.GroupID)
 }
-
-// handleAddParticipantCommand is the in-group counterpart to the DM-forward
-// flow: when forward-privacy hides a user's account, the DM path can't read
-// their telegram id. An admin can instead reply to one of that user's
-// messages in the group with /add — replies always carry the original
-// sender's User, regardless of forward-privacy.
-func (h *Handlers) handleAddParticipantCommand(ctx context.Context, m *messenger.Message) error {
-	if m.Chat.Type == "private" {
-		return h.reply(ctx, m,
-			"Run /add in the group, as a reply to a message from the person you want to add.")
-	}
-	g, err := h.assertGroupAdmin(ctx, m)
-	if err != nil {
-		return nil // assertGroupAdmin already replied
-	}
-	if m.ReplyTo == nil || m.ReplyTo.From == nil {
-		return h.reply(ctx, m,
-			"Reply to a message from the person you want to add, then run /add.")
-	}
-	target := m.ReplyTo.From
-	if target.IsBot {
-		return h.reply(ctx, m, "Bots can't be participants.")
-	}
-	if target.ID == m.From.ID {
-		return h.reply(ctx, m, "Reply to someone else's message, not your own.")
-	}
-	if err := h.Store.Participants().Upsert(ctx, models.Participant{
-		GroupID:          g.GroupID,
-		TelegramID:       target.ID,
-		TelegramUsername: target.Username,
-		ActivatedAt:      h.Config.Now(),
-	}); err != nil {
-		return err
-	}
-	return h.reply(ctx, m, fmt.Sprintf("Added %s.", targetLabel(target.ID, target.Username)))
-}
