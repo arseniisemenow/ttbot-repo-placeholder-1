@@ -43,11 +43,19 @@ type Service struct {
 	cache map[int64]User
 }
 
-// New constructs a Service. The caller passes the identity-service base URL
-// and S21 credentials (ttbot's stored admin creds).
-func New(baseURL, s21Login, s21Password string) *Service {
+// New constructs a Service. The caller passes the identity-service base URL,
+// S21 credentials (ttbot's stored admin creds), and the optional read-scope
+// API key from the IDENTITY_API_KEY env var. When the API key is empty the
+// service still works against an identity-service running in dry-run mode
+// (the bootstrap window between issuance and the operator flipping to
+// enforcing).
+func New(baseURL, s21Login, s21Password, apiKey string) *Service {
+	opts := []identityclient.Option{}
+	if apiKey != "" {
+		opts = append(opts, identityclient.WithAPIKey(apiKey))
+	}
 	return &Service{
-		cli:   identityclient.New(baseURL, s21Login, s21Password),
+		cli:   identityclient.New(baseURL, s21Login, s21Password, opts...),
 		cache: map[int64]User{},
 	}
 }

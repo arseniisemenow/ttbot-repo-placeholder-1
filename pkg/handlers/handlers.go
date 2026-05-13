@@ -27,6 +27,11 @@ type Config struct {
 	// IdentityBaseURL is the identity-service base URL. /admin uses it to
 	// construct a fresh identity.Service after storing new admin creds.
 	IdentityBaseURL string
+	// IdentityAPIKey is ttbot's read-scope X-Api-Key for the identity service.
+	// Passed through to identity.New on every Service construction. Empty
+	// during the bootstrap window before the operator mints + populates the
+	// env (identity-service runs in dry-run mode then).
+	IdentityAPIKey string
 }
 
 // Handlers holds all dependencies. Construct with New, then call Dispatch

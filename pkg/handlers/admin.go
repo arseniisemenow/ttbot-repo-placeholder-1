@@ -52,7 +52,7 @@ func (h *Handlers) handleAdmin(ctx context.Context, m *messenger.Message, args s
 		return err
 	}
 	if h.Config.IdentityBaseURL != "" {
-		h.SetIdentity(identity.New(h.Config.IdentityBaseURL, login, password))
+		h.SetIdentity(identity.New(h.Config.IdentityBaseURL, login, password, h.Config.IdentityAPIKey))
 	}
 	return h.reply(ctx, m, "Credentials registered. ttbot will use them to call the identity service.")
 }

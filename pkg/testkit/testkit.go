@@ -93,7 +93,7 @@ func New(t *testing.T) *World {
 		IdentityBaseURL:         fake.URL(),
 	})
 	// Preconfigure identity client so tests can SetNickname before any /admin runs.
-	w.Handlers.SetIdentity(identity.New(fake.URL(), "tk-login", "tk-password"))
+	w.Handlers.SetIdentity(identity.New(fake.URL(), "tk-login", "tk-password", ""))
 	return w
 }
 
