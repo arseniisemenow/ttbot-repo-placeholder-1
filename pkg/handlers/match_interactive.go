@@ -566,14 +566,17 @@ func (h *Handlers) dispatchTap(ctx context.Context, q *messenger.CallbackQuery, 
 			return fmt.Errorf("group lookup: %w", err)
 		}
 		tReg := time.Now()
-		summary, err := h.registerInteractiveMatch(ctx, g, d.ownerID, d.oppID, uint32(d.p1), uint32(d.p2))
+		summary, finalRows, err := h.registerInteractiveMatch(ctx, g, d.ownerID, d.oppID, uint32(d.p1), uint32(d.p2))
 		perfLog("confirm: registerInteractiveMatch dur=%v", time.Since(tReg))
 		if err != nil {
 			return fmt.Errorf("registration: %w", err)
 		}
 		h.dropDraft(chatID, msgID)
-		// Edit the keyboard message to the summary; final ack confirms tap.
-		if err := h.M.EditKeyboardGrid(ctx, chatID, msgID, summary, nil); err != nil {
+		// Edit the interactive prompt in place to the summary; for the
+		// non-admin path, finalRows carries the Confirm/Cancel keyboard
+		// so the prompt naturally becomes the auto-confirmation message.
+		// One message, no duplicate.
+		if err := h.M.EditKeyboardGrid(ctx, chatID, msgID, summary, finalRows); err != nil {
 			log.Printf("confirm: edit: %v", err)
 		}
 		return h.M.AnswerCallback(ctx, q.ID, "Match registered")
@@ -617,10 +620,19 @@ func (h *Handlers) editAndAck(ctx context.Context, q *messenger.CallbackQuery, t
 }
 
 // registerInteractiveMatch is the Confirm-tap registration path. Mirrors
-// handleMatch's allocate-insert-render flow, minus the typed-args parsing.
-func (h *Handlers) registerInteractiveMatch(ctx context.Context, g models.Group, ownerID, oppID int64, p1Score, p2Score uint32) (string, error) {
+// handleMatch's allocate-insert flow, minus the typed-args parsing.
+//
+// Returns the announcement text plus the inline-keyboard rows the caller
+// should set on the interactive prompt message:
+//   - admin path: rows == nil (no keyboard needed; the match is already
+//     APPROVED and the stats topic is refreshed)
+//   - non-admin path: rows carries Confirm + Cancel; the interactive
+//     prompt becomes the auto-confirmation message in place. This is the
+//     fix for the previous duplicate-message bug where we used to post a
+//     *new* Confirm/Cancel message AND edit the prompt to the same text.
+func (h *Handlers) registerInteractiveMatch(ctx context.Context, g models.Group, ownerID, oppID int64, p1Score, p2Score uint32) (string, [][]messenger.Button, error) {
 	if ownerID == oppID {
-		return "", errors.New("self-play not allowed")
+		return "", nil, errors.New("self-play not allowed")
 	}
 	isAdmin, _ := h.M.IsChatAdmin(ctx, g.GroupID, ownerID)
 	now := h.Config.Now()
@@ -643,7 +655,7 @@ func (h *Handlers) registerInteractiveMatch(ctx context.Context, g models.Group,
 		}
 	})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	verb := "pending"
 	if isAdmin {
@@ -657,14 +669,12 @@ func (h *Handlers) registerInteractiveMatch(ctx context.Context, g models.Group,
 		Player2Score: p2Score,
 	}, verb)
 	if isAdmin {
-		// Admin path: refresh stats; the edited keyboard message IS the
-		// match-registered notice.
 		_ = h.refreshStatsTopic(ctx, g)
-		return text, nil
+		return text, nil, nil
 	}
-	// Non-admin: stamp the author's auto-confirm and post a *new*
-	// Confirm/Cancel message into the matches topic. The keyboard-prompt
-	// message becomes the audit trail "you started /match".
+	// Non-admin: stamp the author's auto-confirm. The caller (the confirm
+	// branch in dispatchTap) will edit the interactive prompt in place to
+	// carry the returned Confirm/Cancel keyboard.
 	_ = h.Store.MatchConfirmations().Insert(ctx, models.MatchConfirmation{
 		GroupID:     g.GroupID,
 		MatchID:     matchID,
@@ -672,11 +682,11 @@ func (h *Handlers) registerInteractiveMatch(ctx context.Context, g models.Group,
 		ConfirmedAt: now,
 	})
 	cb := fmt.Sprintf("%d:%d", g.GroupID, matchID)
-	if _, err := h.M.SendKeyboard(ctx, g.GroupID, g.MatchesTopicID, text,
-		"Confirm", cbConfirmPrefix+cb, "Cancel", cbCancelPrefix+cb); err != nil {
-		return text, err
-	}
-	return text, nil
+	rows := [][]messenger.Button{{
+		{Label: "Confirm", Callback: cbConfirmPrefix + cb},
+		{Label: "Cancel", Callback: cbCancelPrefix + cb},
+	}}
+	return text, rows, nil
 }
 
 func truncate(s string, n int) string {

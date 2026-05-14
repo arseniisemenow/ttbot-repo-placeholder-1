@@ -631,6 +631,10 @@ func TestInteractiveMatchConfirmRegistersMatch(t *testing.T) {
 	w.TapButtonOnMessage(g, alice, "m:i:s:2:1", cur.MessageID, cur.Text)
 	cur, _ = lastEditGridCall(w)
 
+	// Snapshot the SendKeyboard-call count before confirm so we can prove
+	// no duplicate auto-confirm message is posted (the bug the user hit).
+	keyboardSendsBefore := len(w.Messen.CallsByMethod("SendKeyboard"))
+
 	w.TapButtonOnMessage(g, alice, "m:i:confirm", cur.MessageID, cur.Text)
 	m, err := w.Store.Matches().Get(w.Ctx, g.GroupID, 1)
 	if err != nil {
@@ -644,6 +648,28 @@ func TestInteractiveMatchConfirmRegistersMatch(t *testing.T) {
 	}
 	if m.Status != models.MatchStatusPending {
 		t.Errorf("non-admin should yield PENDING, got %v", m.Status)
+	}
+
+	// No new SendKeyboard message: the interactive prompt is edited in
+	// place to carry the Confirm/Cancel buttons. Catches the duplicate-
+	// message regression.
+	keyboardSendsAfter := len(w.Messen.CallsByMethod("SendKeyboard"))
+	if keyboardSendsAfter != keyboardSendsBefore {
+		t.Errorf("non-admin confirm must not post a new keyboard message; got %d new SendKeyboard calls",
+			keyboardSendsAfter-keyboardSendsBefore)
+	}
+
+	// The final EditKeyboardGrid should carry both summary text and
+	// Confirm/Cancel buttons.
+	last, ok := lastEditGridCall(w)
+	if !ok {
+		t.Fatalf("expected an EditKeyboardGrid on confirm, got: %s", w.Messen.Pretty())
+	}
+	if !strings.Contains(last.Text, "Match #1 pending") {
+		t.Errorf("expected match summary in edit, got: %q", last.Text)
+	}
+	if len(last.Buttons) != 2 {
+		t.Errorf("expected 2 buttons (Confirm + Cancel) on the in-place edit, got %d", len(last.Buttons))
 	}
 }
 
@@ -726,38 +752,25 @@ func TestInteractiveMatchInlineFormStillWorks(t *testing.T) {
 	}
 }
 
-// TestInteractiveMatchGracefulErrorOnConfirmFailure: when registration
-// fails (e.g. AllocateAndInsertMatch errors), the keyboard message should
-// be rewritten to a readable error and the draft cleared, instead of
-// vanishing into a timed-out callback.
-func TestInteractiveMatchGracefulErrorOnConfirmFailure(t *testing.T) {
+// TestInteractiveMatchGracefulErrorOnTapFailure: when a tap handler hits
+// a downstream error (here we simulate a Telegram EditKeyboardGrid
+// failure on a score-cell tap), the keyboard message must be rewritten
+// to a readable "/match — failed" message and the keyboard cleared. The
+// draft is dropped so subsequent taps go through the silent-ack path.
+func TestInteractiveMatchGracefulErrorOnTapFailure(t *testing.T) {
 	w, g, alice, _ := setupMatchScenario(t)
 	w.SendInGroup(g, alice, 5, "/match")
 	prompt, _ := lastGridCall(w)
 	w.TapButtonOnMessage(g, alice, "m:i:opp:200", prompt.MessageID, prompt.Text)
 	cur, _ := lastEditGridCall(w)
+
+	// Poison the next EditKeyboardGrid — the one the score-cell tap will
+	// try to make to render p1=3. failTapGracefully then issues a *second*
+	// EditKeyboardGrid (with the error text and a cleared keyboard) which
+	// succeeds.
+	w.Messen.FailNext("EditKeyboardGrid", messenger.ErrNotFound)
 	w.TapButtonOnMessage(g, alice, "m:i:s:1:3", cur.MessageID, cur.Text)
-	cur, _ = lastEditGridCall(w)
-	w.TapButtonOnMessage(g, alice, "m:i:s:2:1", cur.MessageID, cur.Text)
-	cur, _ = lastEditGridCall(w)
 
-	// Force confirm to fail by hard-deleting the group row mid-flow — the
-	// Groups.Get inside the confirm path returns ErrNotFound, which our
-	// handler turns into a graceful "group lookup: …" error.
-	if err := w.Store.PutMatchExt; err == nil {
-		// keep the linter happy; PutMatchExt is the only knob we use here
-	}
-	// Drop the group: with the in-memory store there's no public Delete, so
-	// instead we make IsChatAdmin fail to cause the registration path to
-	// produce an error. Actually the cleanest path is to inject a
-	// pre-existing match counter conflict… simplest reproducible: simulate
-	// a Telegram SendKeyboard failure for the post-Confirm announcement.
-	w.Messen.FailNext("SendKeyboard", messenger.ErrNotFound)
-
-	w.TapButtonOnMessage(g, alice, "m:i:confirm", cur.MessageID, cur.Text)
-
-	// On graceful failure, the last EditKeyboardGrid should carry the error
-	// text and the keyboard should be cleared (no buttons).
 	last, ok := lastEditGridCall(w)
 	if !ok {
 		t.Fatalf("expected EditKeyboardGrid on graceful fail, got: %s", w.Messen.Pretty())
