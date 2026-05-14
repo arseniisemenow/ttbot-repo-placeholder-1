@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/arseniisemenow/ttbot-core/pkg/identity"
 	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-core/pkg/models"
 	"github.com/arseniisemenow/ttbot-core/pkg/rating"
@@ -68,11 +69,15 @@ func (h *Handlers) handleStats(ctx context.Context, m *messenger.Message, args s
 			}
 			target = p.TelegramID
 		} else {
-			svc := h.Identity()
-			if svc == nil {
-				return h.reply(ctx, m, "Player not in rankings yet.")
-			}
-			ius, err := svc.GetUsersByNickname(ctx, id.Value)
+			var ius []identity.User
+			err := h.withIdentity(ctx, func(svc *identity.Service) error {
+				got, err := svc.GetUsersByNickname(ctx, id.Value)
+				if err != nil {
+					return err
+				}
+				ius = got
+				return nil
+			})
 			if err != nil || len(ius) == 0 {
 				return h.reply(ctx, m, "Player not in rankings yet.")
 			}

@@ -5,10 +5,13 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
-	"sync"
 	"time"
+
+	s21account "github.com/arseniisemenow/s21-account-go"
+	identityclient "github.com/arseniisemenow/s21-identity-client-go"
 
 	"github.com/arseniisemenow/ttbot-core/pkg/crypto"
 	"github.com/arseniisemenow/ttbot-core/pkg/identity"
@@ -24,13 +27,13 @@ type Config struct {
 	RatingEngineDefault     string // "elo" or "glicko2" — seed for first read
 	RatingPeriodDaysDefault int
 	Now                     func() time.Time // injectable for tests; defaults to time.Now
-	// IdentityBaseURL is the identity-service base URL. /admin uses it to
-	// construct a fresh identity.Service after storing new admin creds.
+	// IdentityBaseURL is the identity-service base URL. Per-call identity
+	// clients are constructed from the oldest healthy s21_accounts row's
+	// credentials (see withIdentity).
 	IdentityBaseURL string
 	// IdentityAPIKey is ttbot's read-scope X-Api-Key for the identity service.
-	// Passed through to identity.New on every Service construction. Empty
-	// during the bootstrap window before the operator mints + populates the
-	// env (identity-service runs in dry-run mode then).
+	// Empty during the bootstrap window before the operator mints + populates
+	// the env (identity-service runs in dry-run mode then).
 	IdentityAPIKey string
 }
 
@@ -43,9 +46,6 @@ type Handlers struct {
 	S21      s21.Client
 	Cipher   *crypto.Cipher
 	Config   Config
-
-	identityMu  sync.RWMutex
-	identitySvc *identity.Service
 }
 
 // New constructs Handlers.
@@ -69,25 +69,47 @@ func New(s store.Store, m messenger.Messenger, s21c s21.Client, cipher *crypto.C
 	}
 }
 
-// Identity returns the current identity-service client. Returns nil before
-// any admin has run /admin (no credentials yet).
-func (h *Handlers) Identity() *identity.Service {
-	h.identityMu.RLock()
-	defer h.identityMu.RUnlock()
-	return h.identitySvc
+// withIdentity runs `fn` against an identity.Service built from a healthy
+// s21_accounts row's stored credentials. On identityclient.ErrInvalidS21Token
+// from `fn` (or from any nested call), the shared package's PickHealthy
+// marks that row bad and retries with the next healthy row.
+//
+// Callers should treat the returned s21account.ErrNoHealthy as "the bot has
+// no working S21 logins right now" and surface a user-friendly message.
+//
+// Each invocation builds a fresh identity.Service: the in-memory cache lives
+// for the duration of one operation. That's fine — typical operations make
+// at most O(N players) lookups, and the per-row creds-failure cron keeps the
+// healthy set small. No cross-request global cache is intentional: a stale
+// nickname change in the identity bot is reflected on the next operation.
+func (h *Handlers) withIdentity(ctx context.Context, fn func(svc *identity.Service) error) error {
+	if h.Config.IdentityBaseURL == "" {
+		return errors.New("identity base URL not configured")
+	}
+	return s21account.PickHealthy(ctx, h.Store.S21Accounts(), h.Cipher, h.Config.Now(),
+		func(login, password string) error {
+			svc := identity.New(h.Config.IdentityBaseURL, login, password, h.Config.IdentityAPIKey)
+			err := fn(svc)
+			if errors.Is(err, identityclient.ErrInvalidS21Token) {
+				return s21account.ErrInvalidCredentials
+			}
+			return err
+		})
 }
 
-// SetIdentity replaces the identity-service client. Used by /admin after new
-// credentials are stored, and by the bootstrap path on the first cold start.
-func (h *Handlers) SetIdentity(svc *identity.Service) {
-	h.identityMu.Lock()
-	defer h.identityMu.Unlock()
-	h.identitySvc = svc
+// tryIdentity is the fire-and-forget variant of withIdentity used by
+// display-only helpers (playerLabel, displayFor, hasNickname). Any error
+// from fn — including "no healthy login" — is silently swallowed, since
+// the caller has a non-identity fallback (Telegram @username or numeric id).
+// fn should still return errors verbatim so withIdentity can mark a bad
+// row and retry with the next.
+func (h *Handlers) tryIdentity(ctx context.Context, fn func(svc *identity.Service) error) {
+	_ = h.withIdentity(ctx, fn)
 }
 
 // Dispatch routes a single Telegram update through the command tree.
-// Errors are logged and swallowed at the top level — the webhook always returns
-// 200 to Telegram.
+// Errors are logged and swallowed at the top level — the webhook always
+// returns 200 to Telegram.
 func (h *Handlers) Dispatch(ctx context.Context, u *messenger.Update) error {
 	switch {
 	case u.Message != nil:
@@ -127,10 +149,15 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 	if h.deleteStatsTopicLitter(ctx, m) {
 		return nil
 	}
-	// DM-only force-reply for /admin step 2: detect the credentials reply
-	// before the command switch, since the reply text won't start with /.
-	if m.Chat.Type == "private" && isAdminSetReply(m) {
-		return h.handleAdminSetReply(ctx, m)
+	// DM-only force-reply detectors run BEFORE the command switch — reply
+	// text doesn't start with `/`.
+	if m.Chat.Type == "private" {
+		if isLoginReply(m) {
+			return h.handleLoginReply(ctx, m)
+		}
+		if isLogoutReply(m) {
+			return h.handleLogoutReply(ctx, m)
+		}
 	}
 	if m.Text == "" {
 		return nil
@@ -150,13 +177,17 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 		if isPrivate {
 			return h.handleStart(ctx, m)
 		}
-	case "/admin":
+	case "/login":
 		if isPrivate {
-			return h.handleAdmin(ctx, m, args)
+			return h.handleLogin(ctx, m, args)
 		}
-	case "/refresh_identity":
+	case "/logout":
 		if isPrivate {
-			return h.handleRefreshIdentity(ctx, m)
+			return h.handleLogout(ctx, m)
+		}
+	case "/whoami":
+		if isPrivate {
+			return h.handleWhoami(ctx, m)
 		}
 	// --- Group config (any topic of registered supergroup) ---
 	case "/bot_register_group":

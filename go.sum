@@ -2,6 +2,8 @@ cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMT
 cloud.google.com/go v0.34.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/antihax/optional v1.0.0/go.mod h1:uupD/76wgC+ih3iEmQUL+0Ugr19nfwCT1kdvxnR2qWY=
+github.com/arseniisemenow/s21-account-go v0.1.0 h1:uLrJXmvPZpa5GJxNyq9rpac0VQm1aVL8sIcD0QtiQoU=
+github.com/arseniisemenow/s21-account-go v0.1.0/go.mod h1:91aLhA872H3NNHtGB16nvjqOiGF72Bh7KjJGJcRClno=
 github.com/arseniisemenow/s21-identity-client-go v0.3.0 h1:468hbYdtHRSJ95UdhwAIv+9Kf8ukDy9/ahADrLen/NY=
 github.com/arseniisemenow/s21-identity-client-go v0.3.0/go.mod h1:C59D7OcLgiLsEnBlAgpzstL8FMjYlrJa1XrAg7eiPXo=
 github.com/arseniisemenow/s21auto-client-go v0.3.2 h1:uIGu9a1AxXIuio7L7psLku0NtLDDdwlKlYptvYAISjU=

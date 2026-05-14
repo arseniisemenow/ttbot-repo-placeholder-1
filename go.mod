@@ -3,6 +3,7 @@ module github.com/arseniisemenow/ttbot-core
 go 1.23.0
 
 require (
+	github.com/arseniisemenow/s21-account-go v0.1.0
 	github.com/arseniisemenow/s21-identity-client-go v0.3.0
 	github.com/arseniisemenow/s21auto-client-go v0.3.2
 	github.com/ydb-platform/ydb-go-sdk/v3 v3.100.0

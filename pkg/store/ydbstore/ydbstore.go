@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	s21account "github.com/arseniisemenow/s21-account-go"
 	"github.com/ydb-platform/ydb-go-sdk/v3"
 	"github.com/ydb-platform/ydb-go-sdk/v3/table"
 	"github.com/ydb-platform/ydb-go-sdk/v3/table/result/named"
@@ -84,6 +85,7 @@ func optU64(v int64) types.Value {
 
 func (s *Store) Participants() store.ParticipantRepo            { return participantRepo{s} }
 func (s *Store) Admins() store.AdminRepo                        { return adminRepo{s} }
+func (s *Store) S21Accounts() store.S21AccountRepo              { return s21AccountRepo{s} }
 func (s *Store) Groups() store.GroupRepo                        { return groupRepo{s} }
 func (s *Store) Matches() store.MatchRepo                       { return matchRepo{s} }
 func (s *Store) MatchConfirmations() store.MatchConfirmationRepo { return confirmRepo{s} }
@@ -406,6 +408,153 @@ func (r adminRepo) List(ctx context.Context) ([]models.Admin, error) {
 		return nil
 	})
 	return out, err
+}
+
+// --------------------------------------------------------- s21_accounts --
+
+type s21AccountRepo struct{ s *Store }
+
+const s21AccountColsSel = `telegram_id, s21_login, s21_creds_encrypted, campus_id, campus_name, created_at, updated_at, last_used_at, s21_creds_failed_at, s21_creds_last_warned_at`
+
+func scanS21Account(res interface {
+	ScanNamed(...named.Value) error
+}) (s21account.S21Account, error) {
+	var (
+		a            s21account.S21Account
+		tid          uint64
+		campusID     *string
+		campusName   *string
+		lastUsedAt   *time.Time
+		failedAt     *time.Time
+		lastWarnedAt *time.Time
+	)
+	if err := res.ScanNamed(
+		named.Required("telegram_id", &tid),
+		named.Required("s21_login", &a.S21Login),
+		named.Required("s21_creds_encrypted", &a.S21CredsEncrypted),
+		named.Optional("campus_id", &campusID),
+		named.Optional("campus_name", &campusName),
+		named.Required("created_at", &a.CreatedAt),
+		named.Required("updated_at", &a.UpdatedAt),
+		named.Optional("last_used_at", &lastUsedAt),
+		named.Optional("s21_creds_failed_at", &failedAt),
+		named.Optional("s21_creds_last_warned_at", &lastWarnedAt),
+	); err != nil {
+		return s21account.S21Account{}, err
+	}
+	a.TelegramID = int64(tid)
+	if campusID != nil {
+		a.CampusID = *campusID
+	}
+	if campusName != nil {
+		a.CampusName = *campusName
+	}
+	a.LastUsedAt = lastUsedAt
+	a.S21CredsFailedAt = failedAt
+	a.S21CredsLastWarnedAt = lastWarnedAt
+	return a, nil
+}
+
+func (r s21AccountRepo) Get(ctx context.Context, tid int64) (s21account.S21Account, error) {
+	var a s21account.S21Account
+	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
+		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
+			"DECLARE $tid AS Uint64; SELECT "+s21AccountColsSel+" FROM s21_accounts WHERE telegram_id = $tid;",
+			table.NewQueryParameters(table.ValueParam("$tid", types.Uint64Value(uint64(tid)))))
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+		if err := res.NextResultSetErr(ctx); err != nil {
+			return err
+		}
+		if !res.NextRow() {
+			return s21account.ErrNotFound
+		}
+		a, err = scanS21Account(res)
+		return err
+	})
+	return a, err
+}
+
+// List returns rows ordered by created_at ASC, telegram_id ASC. PickHealthy
+// contract: oldest healthy row first.
+func (r s21AccountRepo) List(ctx context.Context) ([]s21account.S21Account, error) {
+	var out []s21account.S21Account
+	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
+		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
+			"SELECT "+s21AccountColsSel+" FROM s21_accounts ORDER BY created_at, telegram_id;", nil)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+		if err := res.NextResultSetErr(ctx); err != nil {
+			return err
+		}
+		for res.NextRow() {
+			a, err := scanS21Account(res)
+			if err != nil {
+				return err
+			}
+			out = append(out, a)
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (r s21AccountRepo) Upsert(ctx context.Context, a s21account.S21Account) error {
+	if a.UpdatedAt.IsZero() {
+		a.UpdatedAt = time.Now().UTC()
+	}
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = a.UpdatedAt
+	}
+	optTime := func(t *time.Time) types.Value {
+		if t == nil {
+			return types.NullValue(types.TypeTimestamp)
+		}
+		return types.OptionalValue(types.TimestampValueFromTime(t.UTC()))
+	}
+	const sql = `
+DECLARE $tid AS Uint64;
+DECLARE $login AS Utf8;
+DECLARE $creds AS Utf8;
+DECLARE $cid AS Utf8?;
+DECLARE $cname AS Utf8?;
+DECLARE $cat AS Timestamp;
+DECLARE $uat AS Timestamp;
+DECLARE $lua AS Timestamp?;
+DECLARE $fat AS Timestamp?;
+DECLARE $wat AS Timestamp?;
+UPSERT INTO s21_accounts
+(telegram_id, s21_login, s21_creds_encrypted, campus_id, campus_name,
+ created_at, updated_at, last_used_at, s21_creds_failed_at, s21_creds_last_warned_at)
+VALUES ($tid, $login, $creds, $cid, $cname, $cat, $uat, $lua, $fat, $wat);`
+	return r.s.doTx(ctx, func(ctx context.Context, tx table.TransactionActor) error {
+		_, err := tx.Execute(ctx, sql, table.NewQueryParameters(
+			table.ValueParam("$tid", types.Uint64Value(uint64(a.TelegramID))),
+			table.ValueParam("$login", types.UTF8Value(a.S21Login)),
+			table.ValueParam("$creds", types.UTF8Value(a.S21CredsEncrypted)),
+			table.ValueParam("$cid", optStr(a.CampusID)),
+			table.ValueParam("$cname", optStr(a.CampusName)),
+			table.ValueParam("$cat", types.TimestampValueFromTime(a.CreatedAt.UTC())),
+			table.ValueParam("$uat", types.TimestampValueFromTime(a.UpdatedAt.UTC())),
+			table.ValueParam("$lua", optTime(a.LastUsedAt)),
+			table.ValueParam("$fat", optTime(a.S21CredsFailedAt)),
+			table.ValueParam("$wat", optTime(a.S21CredsLastWarnedAt)),
+		))
+		return err
+	})
+}
+
+func (r s21AccountRepo) Delete(ctx context.Context, tid int64) error {
+	return r.s.doTx(ctx, func(ctx context.Context, tx table.TransactionActor) error {
+		_, err := tx.Execute(ctx,
+			"DECLARE $tid AS Uint64; DELETE FROM s21_accounts WHERE telegram_id = $tid;",
+			table.NewQueryParameters(table.ValueParam("$tid", types.Uint64Value(uint64(tid)))))
+		return err
+	})
 }
 
 // ---------------------------------------------------------------- groups --

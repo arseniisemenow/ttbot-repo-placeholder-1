@@ -11,100 +11,73 @@ import (
 	"github.com/arseniisemenow/ttbot-core/pkg/testkit"
 )
 
-// ---------- /admin --------------------------------------------------------
+// ---------- /login --------------------------------------------------------
 
-func TestAdminStoresCredentials(t *testing.T) {
+func TestLoginStoresAccount(t *testing.T) {
 	w := testkit.New(t)
 	alice := w.AddUser(100, "alice")
 	w.S21.SetUser("alice_login", "p", s21.Profile{Login: "alice_login", CampusID: "kazan", CampusName: "Kazan"})
-	// Two-step: command (no args) → reply with creds.
-	w.SendDM(alice, "/admin")
-	w.AssertReplyContains("[ADMIN_OP=set]")
-	w.SendDMReply(alice, "alice_login:p", "[ADMIN_OP=set]\n\nReply with...")
-	w.AssertReplyContains("Credentials registered")
-	a, err := w.Store.Admins().Get(w.Ctx, 100)
+	w.SendDM(alice, "/login")
+	w.AssertReplyContains("[LOGIN_OP=set]")
+	w.SendDMReply(alice, "alice_login:p", "[LOGIN_OP=set]\n\nReply with...")
+	w.AssertReplyContains("logged in as alice_login")
+	a, err := w.Store.S21Accounts().Get(w.Ctx, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.S21Login != "alice_login" || a.CampusID != "kazan" {
-		t.Errorf("admin row: %+v", a)
+		t.Errorf("account row: %+v", a)
 	}
 }
 
-func TestAdminRejectsInlineArgs(t *testing.T) {
+func TestLoginRejectsInlineArgs(t *testing.T) {
 	w := testkit.New(t)
 	alice := w.AddUser(100, "alice")
-	w.SendDM(alice, "/admin login:password")
-	w.AssertReplyContains("/admin takes no arguments")
-	if _, err := w.Store.Admins().Get(w.Ctx, 100); err == nil {
-		t.Error("admin row should not be set on inline-args path")
-	}
+	w.SendDM(alice, "/login user:pw")
+	w.AssertReplyContains("takes no arguments")
 }
 
-func TestAdminInvalidCredentials(t *testing.T) {
+func TestLoginInvalidCredentials(t *testing.T) {
 	w := testkit.New(t)
 	alice := w.AddUser(100, "alice")
-	w.SendDM(alice, "/admin")
-	w.SendDMReply(alice, "not_real:nope", "[ADMIN_OP=set]\n\nReply with...")
-	w.AssertReplyContains("Invalid credentials")
+	w.SendDM(alice, "/login")
+	w.SendDMReply(alice, "not_real:nope", "[LOGIN_OP=set]\n\nReply with...")
+	w.AssertReplyContains("rejected")
 }
 
-func TestAdminLastWinsOverwrites(t *testing.T) {
+// ---------- /logout -------------------------------------------------------
+
+func TestLogoutTwoStepRemovesRow(t *testing.T) {
 	w := testkit.New(t)
-	alice := w.AddUser(100, "alice").MakeAdmin("first_login", "pw1", "kazan", "Kazan")
-	_ = alice
-	bob := w.AddUser(200, "bobby")
-	w.S21.SetUser("second_login", "pw2", s21.Profile{Login: "second_login", CampusID: "kazan", CampusName: "Kazan"})
-	w.SendDM(bob, "/admin")
-	w.SendDMReply(bob, "second_login:pw2", "[ADMIN_OP=set]\n\nReply with...")
-	w.AssertReplyContains("Credentials registered")
-	// Bob's admin row exists alongside Alice's.
-	if _, err := w.Store.Admins().Get(w.Ctx, 200); err != nil {
-		t.Errorf("bob's admin row missing: %v", err)
-	}
+	alice := w.AddUser(100, "alice").MakeAdmin("alogin", "pw", "kazan", "Kazan")
+	w.SendDM(alice, "/logout")
+	w.AssertReplyContains("[LOGIN_OP=logout]")
+	w.SendDMReply(alice, "confirm", "[LOGIN_OP=logout]\n\n...")
+	w.AssertReplyContains("Logged out")
 }
 
-// ---------- /refresh_identity ---------------------------------------------
-
-func TestRefreshIdentityRequiresAdmin(t *testing.T) {
+func TestLogoutRequiresLoggedIn(t *testing.T) {
 	w := testkit.New(t)
 	alice := w.AddUser(100, "alice")
-	w.SendDM(alice, "/refresh_identity")
-	w.AssertReplyContains("Only admins")
+	w.SendDM(alice, "/logout")
+	w.AssertReplyContains("not logged in")
 }
 
-func TestRefreshIdentityFlushesCache(t *testing.T) {
+// ---------- /whoami -------------------------------------------------------
+
+func TestWhoamiLoggedIn(t *testing.T) {
 	w := testkit.New(t)
-	admin := w.AddUser(50, "admin01").MakeAdmin("a_login", "pw", "kazan", "Kazan")
-	w.AddUser(100, "alice").SetNickname("alice_s21", "kazan", "Kazan", true)
+	alice := w.AddUser(100, "alice").MakeAdmin("alogin", "pw", "kazan", "Kazan")
+	w.SendDM(alice, "/whoami")
+	w.AssertReplyContains("alogin")
+	w.AssertReplyContains("Kazan")
+}
 
-	// Warm cache: first GetByTelegram call.
-	svc := w.Handlers.Identity()
-	if svc == nil {
-		t.Fatal("identity service not configured")
-	}
-	if _, err := svc.GetByTelegram(w.Ctx, 100); err != nil {
-		t.Fatal(err)
-	}
-	before := w.IdentityFake.Hits()["by_telegram"]
-
-	// Same lookup — cache hit, no extra HTTP call.
-	if _, err := svc.GetByTelegram(w.Ctx, 100); err != nil {
-		t.Fatal(err)
-	}
-	if got := w.IdentityFake.Hits()["by_telegram"]; got != before {
-		t.Errorf("cache miss before flush: hits went %d -> %d", before, got)
-	}
-
-	// Trigger /refresh_identity — should flush and the next lookup hits HTTP again.
-	w.SendDM(admin, "/refresh_identity")
-	w.AssertReplyContains("Cache flushed")
-	if _, err := svc.GetByTelegram(w.Ctx, 100); err != nil {
-		t.Fatal(err)
-	}
-	if got := w.IdentityFake.Hits()["by_telegram"]; got != before+1 {
-		t.Errorf("flush did not bypass cache: hits went %d -> %d (want %d)", before, got, before+1)
-	}
+func TestWhoamiNotLoggedIn(t *testing.T) {
+	w := testkit.New(t)
+	alice := w.AddUser(100, "alice")
+	w.SendDM(alice, "/whoami")
+	w.AssertReplyContains("not logged in")
 }
 
 // ---------- /bot_register_group + topics ---------------------------------

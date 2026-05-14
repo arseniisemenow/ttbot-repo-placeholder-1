@@ -7,8 +7,15 @@ import (
 	"context"
 	"errors"
 
+	s21account "github.com/arseniisemenow/s21-account-go"
+
 	"github.com/arseniisemenow/ttbot-core/pkg/models"
 )
+
+// S21Account is re-exported from the shared package so the rest of ttbot
+// uses one canonical type. Multi-account model: any user can /login and back
+// the bot's S21 calls. Replaces the legacy single-admin-per-campus design.
+type S21Account = s21account.S21Account
 
 // ErrNotFound is the sentinel returned when a single-row read finds nothing.
 var ErrNotFound = errors.New("store: not found")
@@ -21,7 +28,10 @@ var ErrConflict = errors.New("store: conflict")
 // up one implementation at startup.
 type Store interface {
 	Participants() ParticipantRepo
+	// Admins is the legacy single-admin-per-campus repo. Kept for the one-shot
+	// migration into s21_accounts; nothing new should write here.
 	Admins() AdminRepo
+	S21Accounts() S21AccountRepo
 	Groups() GroupRepo
 	Matches() MatchRepo
 	MatchConfirmations() MatchConfirmationRepo
@@ -50,12 +60,27 @@ type ParticipantRepo interface {
 	ListByGroup(ctx context.Context, groupID int64) ([]models.Participant, error)
 }
 
-// AdminRepo persists campus admins.
+// AdminRepo persists legacy single-admin-per-campus rows. Read-only in the
+// new design; the bootstrap migration is the only caller of List, and after
+// it runs the table is unused.
 type AdminRepo interface {
 	Get(ctx context.Context, telegramID int64) (models.Admin, error)
 	GetByCampus(ctx context.Context, campusID string) (models.Admin, error)
 	Upsert(ctx context.Context, a models.Admin) error
 	List(ctx context.Context) ([]models.Admin, error)
+}
+
+// S21AccountRepo persists logged-in accounts. Multiple rows allowed; any
+// healthy row can back the bot's S21 calls (oldest-first via the shared
+// package's PickHealthy). The shape matches s21account.Store exactly so
+// repos can be passed directly to the shared package.
+//
+// List MUST return rows ordered by CreatedAt ASC — PickHealthy relies on it.
+type S21AccountRepo interface {
+	Get(ctx context.Context, telegramID int64) (s21account.S21Account, error)
+	List(ctx context.Context) ([]s21account.S21Account, error)
+	Upsert(ctx context.Context, a s21account.S21Account) error
+	Delete(ctx context.Context, telegramID int64) error
 }
 
 // GroupRepo persists registered supergroups.

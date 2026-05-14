@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	s21account "github.com/arseniisemenow/s21-account-go"
+
 	"github.com/arseniisemenow/ttbot-core/pkg/crypto"
 	"github.com/arseniisemenow/ttbot-core/pkg/handlers"
 	"github.com/arseniisemenow/ttbot-core/pkg/identity"
@@ -92,10 +94,30 @@ func New(t *testing.T) *World {
 		Now:                     w.now,
 		IdentityBaseURL:         fake.URL(),
 	})
-	// Preconfigure identity client so tests can SetNickname before any /admin runs.
-	w.Handlers.SetIdentity(identity.New(fake.URL(), "tk-login", "tk-password", ""))
+	// Seed a baseline logged-in s21_accounts row so that withIdentity() finds
+	// a healthy creds source before any test runs /login. Tests that exercise
+	// the "no logged-in users" path can call w.Store.S21Accounts().Delete().
+	w.S21.SetUser("tk-login", "tk-password", s21.Profile{Login: "tk-login", CampusID: "tk", CampusName: "TK Campus"})
+	w.S21.SetAdminPassword("tk-login", "tk-password")
+	enc, _ := c.Encrypt("tk-password")
+	if err := st.S21Accounts().Upsert(w.Ctx, s21account.S21Account{
+		TelegramID:        baselineLoginTelegramID,
+		S21Login:          "tk-login",
+		S21CredsEncrypted: enc,
+		CampusID:          "tk",
+		CampusName:        "TK Campus",
+		CreatedAt:         w.now(),
+		UpdatedAt:         w.now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return w
 }
+
+// baselineLoginTelegramID owns the seed s21_accounts row inserted by New()
+// so tests have a working identity client out of the box. Tests should never
+// reuse this id as a real-user telegram id.
+const baselineLoginTelegramID int64 = 99999999
 
 func (w *World) now() time.Time { return w.clock }
 
@@ -105,14 +127,11 @@ func (w *World) Advance(d time.Duration) { w.clock = w.clock.Add(d) }
 // SetClock sets the test clock to an absolute time.
 func (w *World) SetClock(t time.Time) { w.clock = t }
 
-// IdentityFlushCache invalidates the identity-client cache so subsequent
-// lookups go back through the fake HTTP server. Mirrors the production
-// /refresh_identity behavior.
-func (w *World) IdentityFlushCache() {
-	if svc := w.Handlers.Identity(); svc != nil {
-		svc.Flush()
-	}
-}
+// IdentityFlushCache is a legacy no-op kept for test compatibility. Under
+// the multi-account model the bot builds a fresh identity.Service per
+// operation, so there is no shared cache to flush — each /match, /rankings,
+// etc. re-reads from the fake httptest server on its own.
+func (w *World) IdentityFlushCache() {}
 
 // allocMessageID picks a fresh message ID for the next inbound message.
 func (w *World) allocMessageID() int64 {
@@ -156,14 +175,28 @@ func (u User) SetNickname(s21Nickname, campusID, campusName string, _ bool) User
 	return u
 }
 
-// MakeAdmin promotes the user to a campus admin and writes the encrypted-creds
-// row to the admins table. Does NOT touch the identity service — admins'
-// "registered S21 user" status is independent of their admin role under the
-// new design.
+// MakeAdmin is the test-time analog of the user running /login. Writes an
+// encrypted s21_accounts row for this user, registers their S21 credentials
+// with the mock S21 client, and (legacy) also writes an admins row so the
+// pre-refactor "admin = exact campus binding" tests still see the link.
+//
+// Under the multi-account model the bot does not gate any command on
+// "admin"; this helper exists only to keep tests legible.
 func (u User) MakeAdmin(login, password, campusID, campusName string) User {
 	u.W.S21.SetUser(login, password, s21.Profile{Login: login, CampusID: campusID, CampusName: campusName})
 	u.W.S21.SetAdminPassword(login, password)
 	enc, _ := u.W.Cipher.Encrypt(password)
+	if err := u.W.Store.S21Accounts().Upsert(u.W.Ctx, s21account.S21Account{
+		TelegramID:        u.TelegramID,
+		S21Login:          login,
+		S21CredsEncrypted: enc,
+		CampusID:          campusID,
+		CampusName:        campusName,
+		CreatedAt:         u.W.now(),
+		UpdatedAt:         u.W.now(),
+	}); err != nil {
+		u.W.T.Fatal(err)
+	}
 	if err := u.W.Store.Admins().Upsert(u.W.Ctx, models.Admin{
 		TelegramID:              u.TelegramID,
 		CampusID:                campusID,

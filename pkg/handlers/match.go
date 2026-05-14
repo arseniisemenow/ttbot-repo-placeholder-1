@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 
+	s21account "github.com/arseniisemenow/s21-account-go"
+
+	"github.com/arseniisemenow/ttbot-core/pkg/identity"
 	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-core/pkg/models"
 	"github.com/arseniisemenow/ttbot-core/pkg/store"
@@ -194,12 +197,19 @@ func (h *Handlers) resolveMatchToken(ctx context.Context, groupID int64, token s
 		}, nil
 	}
 	// Bare nickname → identity service.
-	svc := h.Identity()
-	if svc == nil {
-		return matchPlayer{}, errors.New("Identity service not available yet. Admin must run /admin first.")
-	}
-	users, err := svc.GetUsersByNickname(ctx, id.Value)
-	if err != nil {
+	var users []identity.User
+	err = h.withIdentity(ctx, func(svc *identity.Service) error {
+		got, err := svc.GetUsersByNickname(ctx, id.Value)
+		if err != nil {
+			return err
+		}
+		users = got
+		return nil
+	})
+	switch {
+	case errors.Is(err, s21account.ErrNoHealthy):
+		return matchPlayer{}, errors.New("No logged-in S21 accounts available. Anyone in this group can run /login in @ttbot (DM).")
+	case err != nil:
 		return matchPlayer{}, fmt.Errorf("Identity service error: %v", err)
 	}
 	if len(users) == 0 {
@@ -223,10 +233,19 @@ func (h *Handlers) resolveMatchToken(ctx context.Context, groupID int64, token s
 // nickname (if found), then @username (from the per-group participants
 // cache, or the supplied fallback), then "Player <id>".
 func (h *Handlers) displayFor(ctx context.Context, groupID, telegramID int64, fallbackUsername string) string {
-	if svc := h.Identity(); svc != nil {
-		if iu, err := svc.GetByTelegram(ctx, telegramID); err == nil && iu.Found {
-			return iu.Nickname
+	nickname := ""
+	h.tryIdentity(ctx, func(svc *identity.Service) error {
+		iu, err := svc.GetByTelegram(ctx, telegramID)
+		if err != nil {
+			return err
 		}
+		if iu.Found {
+			nickname = iu.Nickname
+		}
+		return nil
+	})
+	if nickname != "" {
+		return nickname
 	}
 	if fallbackUsername != "" {
 		return "@" + fallbackUsername
@@ -242,15 +261,16 @@ func (h *Handlers) displayFor(ctx context.Context, groupID, telegramID int64, fa
 // and stats. Returns false when there is no identity service yet (no admin has
 // registered creds) so rankings stay empty rather than blowing up.
 func (h *Handlers) hasNickname(ctx context.Context, telegramID int64) bool {
-	svc := h.Identity()
-	if svc == nil {
-		return false
-	}
-	u, err := svc.GetByTelegram(ctx, telegramID)
-	if err != nil {
-		return false
-	}
-	return u.Found
+	found := false
+	h.tryIdentity(ctx, func(svc *identity.Service) error {
+		u, err := svc.GetByTelegram(ctx, telegramID)
+		if err != nil {
+			return err
+		}
+		found = u.Found
+		return nil
+	})
+	return found
 }
 
 // dispatchCallback handles inline-keyboard taps.
@@ -376,11 +396,16 @@ func (h *Handlers) renderMatch(ctx context.Context, groupID int64, m models.Matc
 // neither identity nor the participants cache yields anything.
 func (h *Handlers) playerLabel(ctx context.Context, groupID, telegramID int64) string {
 	nickname := ""
-	if svc := h.Identity(); svc != nil {
-		if iu, err := svc.GetByTelegram(ctx, telegramID); err == nil && iu.Found {
+	h.tryIdentity(ctx, func(svc *identity.Service) error {
+		iu, err := svc.GetByTelegram(ctx, telegramID)
+		if err != nil {
+			return err
+		}
+		if iu.Found {
 			nickname = iu.Nickname
 		}
-	}
+		return nil
+	})
 	username := ""
 	if p, err := h.Store.Participants().Get(ctx, groupID, telegramID); err == nil {
 		username = p.TelegramUsername

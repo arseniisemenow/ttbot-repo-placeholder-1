@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	s21account "github.com/arseniisemenow/s21-account-go"
+
 	"github.com/arseniisemenow/ttbot-core/pkg/models"
 	"github.com/arseniisemenow/ttbot-core/pkg/store"
 )
@@ -21,6 +23,7 @@ type Store struct {
 
 	participants  map[participantKey]models.Participant
 	admins        map[int64]models.Admin
+	s21Accounts   map[int64]s21account.S21Account
 	groups        map[int64]models.Group
 	matches       map[matchKey]models.Match
 	confirmations map[confirmKey]models.MatchConfirmation
@@ -50,6 +53,7 @@ func New() *Store {
 	return &Store{
 		participants:  map[participantKey]models.Participant{},
 		admins:        map[int64]models.Admin{},
+		s21Accounts:   map[int64]s21account.S21Account{},
 		groups:        map[int64]models.Group{},
 		matches:       map[matchKey]models.Match{},
 		confirmations: map[confirmKey]models.MatchConfirmation{},
@@ -64,6 +68,7 @@ func (s *Store) Close() error { return nil }
 
 func (s *Store) Participants() store.ParticipantRepo              { return participantRepo{s} }
 func (s *Store) Admins() store.AdminRepo                          { return adminRepo{s} }
+func (s *Store) S21Accounts() store.S21AccountRepo                { return s21AccountRepo{s} }
 func (s *Store) Groups() store.GroupRepo                          { return groupRepo{s} }
 func (s *Store) Matches() store.MatchRepo                         { return matchRepo{s} }
 func (s *Store) MatchConfirmations() store.MatchConfirmationRepo  { return confirmRepo{s} }
@@ -171,6 +176,51 @@ func (r adminRepo) List(ctx context.Context) ([]models.Admin, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].TelegramID < out[j].TelegramID })
 	return out, nil
+}
+
+// ---------- S21Accounts ---------------------------------------------------
+
+type s21AccountRepo struct{ s *Store }
+
+func (r s21AccountRepo) Get(_ context.Context, tid int64) (s21account.S21Account, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	a, ok := r.s.s21Accounts[tid]
+	if !ok {
+		return s21account.S21Account{}, s21account.ErrNotFound
+	}
+	return a, nil
+}
+
+// List returns rows ordered by CreatedAt ASC — PickHealthy contract.
+func (r s21AccountRepo) List(_ context.Context) ([]s21account.S21Account, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	out := make([]s21account.S21Account, 0, len(r.s.s21Accounts))
+	for _, a := range r.s.s21Accounts {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].TelegramID < out[j].TelegramID
+	})
+	return out, nil
+}
+
+func (r s21AccountRepo) Upsert(_ context.Context, a s21account.S21Account) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	r.s.s21Accounts[a.TelegramID] = a
+	return nil
+}
+
+func (r s21AccountRepo) Delete(_ context.Context, tid int64) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	delete(r.s.s21Accounts, tid)
+	return nil
 }
 
 // ---------- Groups --------------------------------------------------------
