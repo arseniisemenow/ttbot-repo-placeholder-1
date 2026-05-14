@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/store"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/validation"
+	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/store"
+	"github.com/arseniisemenow/ttbot-core/pkg/validation"
 )
 
 // callback-data prefixes for match buttons. Keep short — Telegram caps at ~64 bytes.

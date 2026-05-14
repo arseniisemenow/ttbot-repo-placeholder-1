@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
 )
 
 // ErrNotFound is the sentinel returned when a single-row read finds nothing.

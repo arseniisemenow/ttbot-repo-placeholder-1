@@ -7,8 +7,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
 )
 
 // Notifier sends group-targeted notifications.

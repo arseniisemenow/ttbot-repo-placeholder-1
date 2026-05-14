@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
 )
 
 func TestSendInGroupWithUsername(t *testing.T) {

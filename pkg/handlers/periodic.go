@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/store"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/store"
 )
 
 // PeriodicJob is the body of the ttbot-cron function. Deletes expired pending

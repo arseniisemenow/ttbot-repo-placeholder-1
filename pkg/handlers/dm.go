@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
 )
 
 // callback-data prefix for "pick which group to backfill this participant

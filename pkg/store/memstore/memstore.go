@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/store"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/store"
 )
 
 // Store is the in-memory store.Store.

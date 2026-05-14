@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
 )
 
 // handleStart prints the full help text. Same handler covers /start and /help.

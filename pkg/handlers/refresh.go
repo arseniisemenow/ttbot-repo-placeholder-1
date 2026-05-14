@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
 )
 
 // refreshGroupUsernames walks every cached participant in one group and

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	identityclient "github.com/arseniisemenow/ttbot-repo-placeholder-2"
+	identityclient "github.com/arseniisemenow/s21-identity-client-go"
 )
 
 // User is the local view of an identity record. Mirrors identityclient.User

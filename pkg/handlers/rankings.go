@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/rating"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/validation"
+	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/rating"
+	"github.com/arseniisemenow/ttbot-core/pkg/validation"
 )
 
 // MaxRankings is the cap on how many players appear in /rankings or stats.

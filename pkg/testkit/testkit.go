@@ -20,13 +20,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/crypto"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/handlers"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/identity"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/store/memstore"
+	"github.com/arseniisemenow/ttbot-core/pkg/crypto"
+	"github.com/arseniisemenow/ttbot-core/pkg/handlers"
+	"github.com/arseniisemenow/ttbot-core/pkg/identity"
+	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/s21"
+	"github.com/arseniisemenow/ttbot-core/pkg/store/memstore"
 )
 
 // World is the test fixture. Use New to construct.

@@ -7,11 +7,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/identity"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/validation"
+	"github.com/arseniisemenow/ttbot-core/pkg/identity"
+	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
+	"github.com/arseniisemenow/ttbot-core/pkg/models"
+	"github.com/arseniisemenow/ttbot-core/pkg/s21"
+	"github.com/arseniisemenow/ttbot-core/pkg/validation"
 )
 
 // adminSetPromptRegex matches the bot's two-step /admin prompt header.
