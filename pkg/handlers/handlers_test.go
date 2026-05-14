@@ -570,10 +570,19 @@ func TestInteractiveMatchOpponentTapShowsScorePicker(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected EditKeyboardGrid after opp tap, got: %s", w.Messen.Pretty())
 	}
-	if !strings.Contains(got.Text, "[MATCH_OP=score owner=100 opp=200 p1=- p2=-]") {
-		t.Errorf("score header missing/wrong: %q", got.Text)
+	// The new score header carries URL-encoded owner_label and opp_label so
+	// score-cell taps render without identity-service calls. We only assert
+	// the stable fields here.
+	for _, want := range []string{
+		"[MATCH_OP=score owner=100 ",
+		" opp=200 ",
+		" p1=- p2=-]",
+	} {
+		if !strings.Contains(got.Text, want) {
+			t.Errorf("score header missing %q in: %q", want, got.Text)
+		}
 	}
-	// Score grid has 10 rows × 2 cols + 1 confirm/cancel + 1 back = 22 buttons total.
+	// Score grid: 10 rows × 2 cols + confirm/cancel row + back row = 23 buttons.
 	if len(got.Buttons) != 10*2+2+1 {
 		t.Errorf("expected 23 buttons (20 score + confirm/cancel + back), got %d", len(got.Buttons))
 	}
@@ -714,6 +723,50 @@ func TestInteractiveMatchInlineFormStillWorks(t *testing.T) {
 	// Inline path still uses the legacy SendKeyboard (Confirm/Cancel pair).
 	if calls := w.Messen.CallsByMethod("SendKeyboard"); len(calls) == 0 {
 		t.Fatalf("inline /match should still post Confirm/Cancel keyboard; got: %s", w.Messen.Pretty())
+	}
+}
+
+// TestInteractiveMatchGracefulErrorOnConfirmFailure: when registration
+// fails (e.g. AllocateAndInsertMatch errors), the keyboard message should
+// be rewritten to a readable error and the draft cleared, instead of
+// vanishing into a timed-out callback.
+func TestInteractiveMatchGracefulErrorOnConfirmFailure(t *testing.T) {
+	w, g, alice, _ := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	prompt, _ := lastGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:opp:200", prompt.MessageID, prompt.Text)
+	cur, _ := lastEditGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:s:1:3", cur.MessageID, cur.Text)
+	cur, _ = lastEditGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:s:2:1", cur.MessageID, cur.Text)
+	cur, _ = lastEditGridCall(w)
+
+	// Force confirm to fail by hard-deleting the group row mid-flow — the
+	// Groups.Get inside the confirm path returns ErrNotFound, which our
+	// handler turns into a graceful "group lookup: …" error.
+	if err := w.Store.PutMatchExt; err == nil {
+		// keep the linter happy; PutMatchExt is the only knob we use here
+	}
+	// Drop the group: with the in-memory store there's no public Delete, so
+	// instead we make IsChatAdmin fail to cause the registration path to
+	// produce an error. Actually the cleanest path is to inject a
+	// pre-existing match counter conflict… simplest reproducible: simulate
+	// a Telegram SendKeyboard failure for the post-Confirm announcement.
+	w.Messen.FailNext("SendKeyboard", messenger.ErrNotFound)
+
+	w.TapButtonOnMessage(g, alice, "m:i:confirm", cur.MessageID, cur.Text)
+
+	// On graceful failure, the last EditKeyboardGrid should carry the error
+	// text and the keyboard should be cleared (no buttons).
+	last, ok := lastEditGridCall(w)
+	if !ok {
+		t.Fatalf("expected EditKeyboardGrid on graceful fail, got: %s", w.Messen.Pretty())
+	}
+	if !strings.Contains(last.Text, "/match — failed") {
+		t.Errorf("expected '/match — failed' text, got: %q", last.Text)
+	}
+	if len(last.Buttons) != 0 {
+		t.Errorf("expected keyboard cleared on graceful fail, got %d buttons", len(last.Buttons))
 	}
 }
 

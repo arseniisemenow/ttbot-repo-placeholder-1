@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	s21account "github.com/arseniisemenow/s21-account-go"
@@ -37,6 +38,13 @@ type Config struct {
 	IdentityAPIKey string
 }
 
+// s21NickCacheTTL is how long a cached S21 nickname (or cached "no
+// nickname") record is considered fresh before the next access refetches
+// from the identity service. Long because S21 nicknames change extremely
+// rarely (only when a user runs /provide_nickname in the identity bot)
+// and the displayed string is purely cosmetic.
+const s21NickCacheTTL = 7 * 24 * time.Hour
+
 // Handlers holds all dependencies. Construct with New, then call Dispatch
 // or PeriodicJob.
 type Handlers struct {
@@ -46,6 +54,17 @@ type Handlers struct {
 	S21      s21.Client
 	Cipher   *crypto.Cipher
 	Config   Config
+
+	// S21Nicks is the process-wide S21-nickname cache. One instance shared
+	// across all handlers (playerLabel, displayFor, hasNickname,
+	// match_interactive, …). Lazy refresh on read.
+	S21Nicks *identity.S21NickCache
+
+	// matchDrafts holds in-flight /match interactive flows keyed by
+	// "<chat_id>:<message_id>". Authoritative state for fast-click safety;
+	// the message-text header is a mirror that survives cold starts.
+	matchDraftsMu sync.RWMutex
+	matchDrafts   map[string]*matchDraft
 }
 
 // New constructs Handlers.
@@ -60,12 +79,14 @@ func New(s store.Store, m messenger.Messenger, s21c s21.Client, cipher *crypto.C
 		cfg.RatingPeriodDaysDefault = 1
 	}
 	return &Handlers{
-		Store:    s,
-		M:        m,
-		Notifier: notify.New(m),
-		S21:      s21c,
-		Cipher:   cipher,
-		Config:   cfg,
+		Store:       s,
+		M:           m,
+		Notifier:    notify.New(m),
+		S21:         s21c,
+		Cipher:      cipher,
+		Config:      cfg,
+		S21Nicks:    identity.NewS21NickCache(s21NickCacheTTL, cfg.Now),
+		matchDrafts: map[string]*matchDraft{},
 	}
 }
 

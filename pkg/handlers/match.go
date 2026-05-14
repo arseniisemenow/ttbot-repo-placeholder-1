@@ -239,19 +239,8 @@ func (h *Handlers) resolveMatchToken(ctx context.Context, groupID int64, token s
 // nickname (if found), then @username (from the per-group participants
 // cache, or the supplied fallback), then "Player <id>".
 func (h *Handlers) displayFor(ctx context.Context, groupID, telegramID int64, fallbackUsername string) string {
-	nickname := ""
-	h.tryIdentity(ctx, func(svc *identity.Service) error {
-		iu, err := svc.GetByTelegram(ctx, telegramID)
-		if err != nil {
-			return err
-		}
-		if iu.Found {
-			nickname = iu.Nickname
-		}
-		return nil
-	})
-	if nickname != "" {
-		return nickname
+	if nick, ok := h.lookupS21Nickname(ctx, telegramID); ok {
+		return nick
 	}
 	if fallbackUsername != "" {
 		return "@" + fallbackUsername
@@ -267,16 +256,39 @@ func (h *Handlers) displayFor(ctx context.Context, groupID, telegramID int64, fa
 // and stats. Returns false when there is no identity service yet (no admin has
 // registered creds) so rankings stay empty rather than blowing up.
 func (h *Handlers) hasNickname(ctx context.Context, telegramID int64) bool {
-	found := false
+	_, ok := h.lookupS21Nickname(ctx, telegramID)
+	return ok
+}
+
+// lookupS21Nickname returns the user's S21 nickname (the school-side
+// identifier — distinct from their Telegram @username). The cache fronts
+// the identity-service call: hits avoid network entirely, misses fetch and
+// populate. A "no S21 nickname registered" result is itself cached so
+// repeated lookups for the same telegram_id don't all hit identity.
+//
+// The bool is true iff the lookup yielded a real registered nickname.
+// Errors (identity unavailable, no healthy login) collapse to false — the
+// caller's fallbacks (Telegram username, "Player N") cover those cases.
+func (h *Handlers) lookupS21Nickname(ctx context.Context, telegramID int64) (string, bool) {
+	if u, ok := h.S21Nicks.Get(telegramID); ok {
+		return u.Nickname, u.Found && u.Nickname != ""
+	}
+	var got identity.User
+	var fetched bool
 	h.tryIdentity(ctx, func(svc *identity.Service) error {
 		u, err := svc.GetByTelegram(ctx, telegramID)
 		if err != nil {
 			return err
 		}
-		found = u.Found
+		got = u
+		fetched = true
 		return nil
 	})
-	return found
+	if fetched {
+		h.S21Nicks.Put(telegramID, got)
+		return got.Nickname, got.Found && got.Nickname != ""
+	}
+	return "", false
 }
 
 // dispatchCallback handles inline-keyboard taps.
@@ -403,17 +415,7 @@ func (h *Handlers) renderMatch(ctx context.Context, groupID int64, m models.Matc
 // available, falling back to whichever is known, or "Player <id>" when
 // neither identity nor the participants cache yields anything.
 func (h *Handlers) playerLabel(ctx context.Context, groupID, telegramID int64) string {
-	nickname := ""
-	h.tryIdentity(ctx, func(svc *identity.Service) error {
-		iu, err := svc.GetByTelegram(ctx, telegramID)
-		if err != nil {
-			return err
-		}
-		if iu.Found {
-			nickname = iu.Nickname
-		}
-		return nil
-	})
+	nickname, _ := h.lookupS21Nickname(ctx, telegramID)
 	username := ""
 	if p, err := h.Store.Participants().Get(ctx, groupID, telegramID); err == nil {
 		username = p.TelegramUsername
