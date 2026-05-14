@@ -2,59 +2,58 @@ package handlers
 
 import (
 	"context"
-	"errors"
+	"strings"
 
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/identity"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
-	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/validation"
 )
 
-// handleStart greets a DM user.
+// handleStart prints the full help text. Same handler covers /start and /help.
+//
+// Sections are ordered Matches → DM → Admin so the most common-use commands
+// are at the top. /admin no longer accepts inline args — credentials are
+// taken via a force-reply prompt so they can be deleted right after reading.
 func (h *Handlers) handleStart(ctx context.Context, m *messenger.Message) error {
-	return h.reply(ctx, m,
-		"Hi! I track table-tennis matches at S21 campuses.\n"+
-			"To register your S21 nickname, talk to @school_21_identity_bot.\n"+
-			"If you administer a campus, run /admin <login:password> here.")
+	const help = `ttbot — table-tennis match tracker.
+
+Matches topic:
+  /match @opponent 3-1 — you vs opponent (your score first)
+  /match @p1 @p2 3-1 — register a match between two named players
+  /undo #N — undo or restore match #N (two-step confirm)
+  /ping — react to your message; backfills your row in participants
+
+Each player token can be either @telegram_username or a bare S21 nickname.
+
+DM:
+  /start, /help — this message
+  /admin — claim or rotate admin role; two-step (I prompt for S21 creds in a reply and delete it)
+  /refresh_identity — clear my local identity-service cache
+
+Admin only — any topic of a registered group:
+  /bot_register_group — link this group to ttbot
+  /set_matches_topic — call inside the matches topic to register it
+  /set_stats_topic — call inside the stats topic to register it
+  /refresh_usernames — refresh the participants cache against Telegram`
+	return h.reply(ctx, m, help)
 }
 
-// handleAdmin stores S21 admin credentials that ttbot will use to call the
-// identity service. Validation: parse login:password, attempt S21
-// Authenticate (fail-closed on bad creds), encrypt, upsert admins row keyed
-// by Telegram ID (last-wins on re-runs). On success, re-instantiates the
-// identity-service client with the fresh credentials.
+// handleAdmin is step 1 of the two-step admin flow. /admin takes no
+// arguments; sends a force-reply prompt and lets handleAdminSetReply
+// (admin_set.go) finish.
+//
+// Inline-args form (`/admin login:password`) is rejected outright —
+// Telegram keeps command text in chat history, so credentials there
+// are exposed.
 func (h *Handlers) handleAdmin(ctx context.Context, m *messenger.Message, args string) error {
-	login, password, err := validation.ParseAdminCredentials(args)
-	if err != nil {
-		return h.reply(ctx, m, "Usage: /admin <login:password>")
+	if strings.TrimSpace(args) != "" {
+		return h.reply(ctx, m, "/admin takes no arguments. Run it again with nothing after the slash.")
 	}
-	profile, err := h.S21.Authenticate(ctx, login, password)
-	switch {
-	case errors.Is(err, s21.ErrInvalidCredentials):
-		return h.reply(ctx, m, "Invalid credentials. Try again.")
-	case err != nil:
-		return err
+	prompt := "[ADMIN_OP=set]\n\n" +
+		"Reply with your S21 credentials as `login:password` on a single line. " +
+		"I'll authenticate against S21, encrypt the result, and **delete your reply immediately** so the creds don't linger in this chat."
+	if _, err := h.M.SendMessageWithForceReply(ctx, m.Chat.ID, prompt, "login:password"); err != nil {
+		return h.reply(ctx, m, "Couldn't send the prompt: "+err.Error())
 	}
-	ct, err := h.Cipher.Encrypt(password)
-	if err != nil {
-		return err
-	}
-	admin := models.Admin{
-		TelegramID:              m.From.ID,
-		CampusID:                profile.CampusID,
-		CampusName:              profile.CampusName,
-		S21Login:                login,
-		S21CredentialsEncrypted: ct,
-		CreatedAt:               h.Config.Now(),
-	}
-	if err := h.Store.Admins().Upsert(ctx, admin); err != nil {
-		return err
-	}
-	if h.Config.IdentityBaseURL != "" {
-		h.SetIdentity(identity.New(h.Config.IdentityBaseURL, login, password, h.Config.IdentityAPIKey))
-	}
-	return h.reply(ctx, m, "Credentials registered. ttbot will use them to call the identity service.")
+	return nil
 }
 
 // handleRefreshIdentity is admin-only (DM-only): flushes the in-process

@@ -120,6 +120,16 @@ func (m *Mock) SendMessage(ctx context.Context, chatID, topicID int64, text stri
 	return id, nil
 }
 
+func (m *Mock) SendMessageWithForceReply(ctx context.Context, chatID int64, text, placeholder string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := m.record(Call{Method: "SendMessageWithForceReply", ChatID: chatID, Text: text})
+	if err := m.maybeFail("SendMessageWithForceReply", chatID); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
 func (m *Mock) SendKeyboard(ctx context.Context, chatID, topicID int64, text, leftLabel, leftCallback, rightLabel, rightCallback string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

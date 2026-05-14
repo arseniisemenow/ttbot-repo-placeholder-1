@@ -118,6 +118,21 @@ func (t *telegramAPI) SendMessage(ctx context.Context, chatID, topicID int64, te
 	return msg.MessageID, nil
 }
 
+func (t *telegramAPI) SendMessageWithForceReply(ctx context.Context, chatID int64, text, placeholder string) (int64, error) {
+	rm := map[string]any{"force_reply": true, "selective": true}
+	if placeholder != "" {
+		rm["input_field_placeholder"] = placeholder
+	}
+	payload := map[string]any{"chat_id": chatID, "text": text, "reply_markup": rm}
+	var msg struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if err := t.call(ctx, "sendMessage", payload, &msg); err != nil {
+		return 0, err
+	}
+	return msg.MessageID, nil
+}
+
 func (t *telegramAPI) SendKeyboard(ctx context.Context, chatID, topicID int64, text, leftLabel, leftCallback, rightLabel, rightCallback string) (int64, error) {
 	kb := map[string]any{
 		"inline_keyboard": [][]map[string]string{

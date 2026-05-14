@@ -17,7 +17,10 @@ func TestAdminStoresCredentials(t *testing.T) {
 	w := testkit.New(t)
 	alice := w.AddUser(100, "alice")
 	w.S21.SetUser("alice_login", "p", s21.Profile{Login: "alice_login", CampusID: "kazan", CampusName: "Kazan"})
-	w.SendDM(alice, "/admin alice_login:p")
+	// Two-step: command (no args) → reply with creds.
+	w.SendDM(alice, "/admin")
+	w.AssertReplyContains("[ADMIN_OP=set]")
+	w.SendDMReply(alice, "alice_login:p", "[ADMIN_OP=set]\n\nReply with...")
 	w.AssertReplyContains("Credentials registered")
 	a, err := w.Store.Admins().Get(w.Ctx, 100)
 	if err != nil {
@@ -28,10 +31,21 @@ func TestAdminStoresCredentials(t *testing.T) {
 	}
 }
 
+func TestAdminRejectsInlineArgs(t *testing.T) {
+	w := testkit.New(t)
+	alice := w.AddUser(100, "alice")
+	w.SendDM(alice, "/admin login:password")
+	w.AssertReplyContains("/admin takes no arguments")
+	if _, err := w.Store.Admins().Get(w.Ctx, 100); err == nil {
+		t.Error("admin row should not be set on inline-args path")
+	}
+}
+
 func TestAdminInvalidCredentials(t *testing.T) {
 	w := testkit.New(t)
 	alice := w.AddUser(100, "alice")
-	w.SendDM(alice, "/admin not_real:nope")
+	w.SendDM(alice, "/admin")
+	w.SendDMReply(alice, "not_real:nope", "[ADMIN_OP=set]\n\nReply with...")
 	w.AssertReplyContains("Invalid credentials")
 }
 
@@ -41,9 +55,10 @@ func TestAdminLastWinsOverwrites(t *testing.T) {
 	_ = alice
 	bob := w.AddUser(200, "bobby")
 	w.S21.SetUser("second_login", "pw2", s21.Profile{Login: "second_login", CampusID: "kazan", CampusName: "Kazan"})
-	w.SendDM(bob, "/admin second_login:pw2")
+	w.SendDM(bob, "/admin")
+	w.SendDMReply(bob, "second_login:pw2", "[ADMIN_OP=set]\n\nReply with...")
 	w.AssertReplyContains("Credentials registered")
-	// Bob's admin row exists.
+	// Bob's admin row exists alongside Alice's.
 	if _, err := w.Store.Admins().Get(w.Ctx, 200); err != nil {
 		t.Errorf("bob's admin row missing: %v", err)
 	}

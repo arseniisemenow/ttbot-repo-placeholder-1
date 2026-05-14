@@ -127,6 +127,11 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 	if h.deleteStatsTopicLitter(ctx, m) {
 		return nil
 	}
+	// DM-only force-reply for /admin step 2: detect the credentials reply
+	// before the command switch, since the reply text won't start with /.
+	if m.Chat.Type == "private" && isAdminSetReply(m) {
+		return h.handleAdminSetReply(ctx, m)
+	}
 	if m.Text == "" {
 		return nil
 	}

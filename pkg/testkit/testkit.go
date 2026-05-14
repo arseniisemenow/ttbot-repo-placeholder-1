@@ -253,6 +253,19 @@ func (w *World) SendReply(g Group, from User, topicID int64, text string, replyT
 	w.dispatchMessage(messenger.Chat{ID: g.GroupID, Type: "supergroup", IsForum: true}, from, topicID, text, reply)
 }
 
+// SendDMReply dispatches a DM that's a reply to a previous bot message. The
+// reply target's From is marked IsBot=true so handlers gating on "the
+// original was from a bot" (e.g. /admin force-reply) trigger correctly.
+func (w *World) SendDMReply(from User, text string, replyToText string) {
+	w.W().Messen.Reset()
+	reply := &messenger.Message{
+		Text:      replyToText,
+		MessageID: 999,
+		From:      &messenger.User{IsBot: true},
+	}
+	w.dispatchMessage(messenger.Chat{ID: from.TelegramID, Type: "private"}, from, 0, text, reply)
+}
+
 // TapButton synthesizes a callback-query for the given match payload.
 func (w *World) TapButton(g Group, from User, callbackData string, messageID int64) {
 	upd := &messenger.Update{
@@ -317,13 +330,16 @@ func (w *World) LastReply() messenger.Call {
 	return calls[len(calls)-1]
 }
 
-// AssertReplyContains fails unless at least one SendMessage call's text
-// contains the substring.
+// AssertReplyContains fails unless at least one outbound message contains
+// the substring. Checks both SendMessage and SendMessageWithForceReply
+// (the latter is used for /admin's two-step credentials prompt).
 func (w *World) AssertReplyContains(substr string) {
 	w.T.Helper()
-	for _, c := range w.Messen.CallsByMethod("SendMessage") {
-		if strings.Contains(c.Text, substr) {
-			return
+	for _, method := range []string{"SendMessage", "SendMessageWithForceReply"} {
+		for _, c := range w.Messen.CallsByMethod(method) {
+			if strings.Contains(c.Text, substr) {
+				return
+			}
 		}
 	}
 	w.T.Fatalf("no reply contains %q\ntranscript:\n%s", substr, w.Messen.Pretty())

@@ -18,6 +18,14 @@ type Messenger interface {
 	// Returns the new message's ID.
 	SendMessage(ctx context.Context, chatID, topicID int64, text string) (int64, error)
 
+	// SendMessageWithForceReply sends a DM tagged with Telegram's
+	// `force_reply` markup. The recipient's client shows an immediate
+	// reply composer; their reply arrives as a Message with ReplyTo
+	// populated. Used to split a sensitive prompt ("/admin") from the
+	// secret ("login:password") into two messages so the bot can delete
+	// only the secret.
+	SendMessageWithForceReply(ctx context.Context, chatID int64, text, placeholder string) (int64, error)
+
 	// SendKeyboard sends a message with two inline buttons (typical Approve/Cancel
 	// pattern used for /match confirmation). callbackData* may be any string up
 	// to ~64 bytes (Telegram limit).
