@@ -179,6 +179,49 @@ func (t *telegramAPI) SendInlineKeyboard(ctx context.Context, chatID, topicID in
 	return msg.MessageID, nil
 }
 
+func (t *telegramAPI) SendKeyboardGrid(ctx context.Context, chatID, topicID int64, text string, rows [][]Button) (int64, error) {
+	kb := make([][]map[string]string, 0, len(rows))
+	for _, row := range rows {
+		cells := make([]map[string]string, 0, len(row))
+		for _, b := range row {
+			cells = append(cells, map[string]string{"text": b.Label, "callback_data": b.Callback})
+		}
+		kb = append(kb, cells)
+	}
+	payload := map[string]any{
+		"chat_id":      chatID,
+		"text":         text,
+		"reply_markup": map[string]any{"inline_keyboard": kb},
+	}
+	if topicID > 0 {
+		payload["message_thread_id"] = topicID
+	}
+	var msg struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if err := t.call(ctx, "sendMessage", payload, &msg); err != nil {
+		return 0, err
+	}
+	return msg.MessageID, nil
+}
+
+func (t *telegramAPI) EditKeyboardGrid(ctx context.Context, chatID, messageID int64, text string, rows [][]Button) error {
+	kb := make([][]map[string]string, 0, len(rows))
+	for _, row := range rows {
+		cells := make([]map[string]string, 0, len(row))
+		for _, b := range row {
+			cells = append(cells, map[string]string{"text": b.Label, "callback_data": b.Callback})
+		}
+		kb = append(kb, cells)
+	}
+	return t.call(ctx, "editMessageText", map[string]any{
+		"chat_id":      chatID,
+		"message_id":   messageID,
+		"text":         text,
+		"reply_markup": map[string]any{"inline_keyboard": kb},
+	}, nil)
+}
+
 func (t *telegramAPI) EditMessage(ctx context.Context, chatID, messageID int64, text string) error {
 	return t.call(ctx, "editMessageText", map[string]any{
 		"chat_id":    chatID,

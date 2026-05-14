@@ -301,6 +301,14 @@ func (w *World) SendDMReply(from User, text string, replyToText string) {
 
 // TapButton synthesizes a callback-query for the given match payload.
 func (w *World) TapButton(g Group, from User, callbackData string, messageID int64) {
+	w.TapButtonOnMessage(g, from, callbackData, messageID, "")
+}
+
+// TapButtonOnMessage is the same as TapButton but also attaches text on the
+// keyboard message that the callback is attached to. The interactive /match
+// flow stores state in that text (header line), so the callback handler
+// can read it back via q.Message.Text.
+func (w *World) TapButtonOnMessage(g Group, from User, callbackData string, messageID int64, messageText string) {
 	upd := &messenger.Update{
 		CallbackQuery: &messenger.CallbackQuery{
 			ID:   fmt.Sprintf("cb-%d", time.Now().UnixNano()),
@@ -308,6 +316,7 @@ func (w *World) TapButton(g Group, from User, callbackData string, messageID int
 			Message: &messenger.Message{
 				MessageID: messageID,
 				Chat:      messenger.Chat{ID: g.GroupID, Type: "supergroup", IsForum: true},
+				Text:      messageText,
 			},
 			Data: callbackData,
 		},

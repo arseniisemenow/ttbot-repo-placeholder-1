@@ -507,3 +507,238 @@ func TestDispatcherIgnoresUnknownText(t *testing.T) {
 	w.SendDM(alice, "hello")
 	w.AssertNoReplies()
 }
+
+// ---------- Interactive /match (no args) ----------------------------------
+
+// lastGridCall returns the most recent SendKeyboardGrid (or EditKeyboardGrid
+// if no Send has been seen yet) recorded by the mock.
+func lastGridCall(w *testkit.World) (messenger.Call, bool) {
+	calls := w.Messen.CallsByMethod("SendKeyboardGrid")
+	if len(calls) > 0 {
+		return calls[len(calls)-1], true
+	}
+	return messenger.Call{}, false
+}
+
+// lastEditGridCall returns the most recent EditKeyboardGrid.
+func lastEditGridCall(w *testkit.World) (messenger.Call, bool) {
+	calls := w.Messen.CallsByMethod("EditKeyboardGrid")
+	if len(calls) > 0 {
+		return calls[len(calls)-1], true
+	}
+	return messenger.Call{}, false
+}
+
+func TestInteractiveMatchOpensOpponentPicker(t *testing.T) {
+	w, g, alice, _ := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	got, ok := lastGridCall(w)
+	if !ok {
+		t.Fatalf("expected SendKeyboardGrid for /match, got: %s", w.Messen.Pretty())
+	}
+	if !strings.Contains(got.Text, "[MATCH_OP=opp owner=100") {
+		t.Errorf("opp header missing in text: %q", got.Text)
+	}
+	if !strings.Contains(got.Text, "pick your opponent") {
+		t.Errorf("opp prompt body missing: %q", got.Text)
+	}
+	// Bob should be in the list; Alice (caller) should not.
+	foundBob, foundAlice := false, false
+	for _, b := range got.Buttons {
+		if b.Callback == "m:i:opp:200" {
+			foundBob = true
+		}
+		if b.Callback == "m:i:opp:100" {
+			foundAlice = true
+		}
+	}
+	if !foundBob {
+		t.Errorf("bob not in opponent buttons: %+v", got.Buttons)
+	}
+	if foundAlice {
+		t.Errorf("alice (self) should not be in opponent buttons")
+	}
+}
+
+func TestInteractiveMatchOpponentTapShowsScorePicker(t *testing.T) {
+	w, g, alice, bob := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	prompt, _ := lastGridCall(w)
+
+	w.TapButtonOnMessage(g, alice, "m:i:opp:200", prompt.MessageID, prompt.Text)
+	got, ok := lastEditGridCall(w)
+	if !ok {
+		t.Fatalf("expected EditKeyboardGrid after opp tap, got: %s", w.Messen.Pretty())
+	}
+	if !strings.Contains(got.Text, "[MATCH_OP=score owner=100 opp=200 p1=- p2=-]") {
+		t.Errorf("score header missing/wrong: %q", got.Text)
+	}
+	// Score grid has 10 rows × 2 cols + 1 confirm/cancel + 1 back = 22 buttons total.
+	if len(got.Buttons) != 10*2+2+1 {
+		t.Errorf("expected 23 buttons (20 score + confirm/cancel + back), got %d", len(got.Buttons))
+	}
+	_ = bob
+}
+
+func TestInteractiveMatchScoreSelectionUpdatesMarkers(t *testing.T) {
+	w, g, alice, _ := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	prompt, _ := lastGridCall(w)
+	// Tap opponent → score picker.
+	w.TapButtonOnMessage(g, alice, "m:i:opp:200", prompt.MessageID, prompt.Text)
+	scorePrompt, _ := lastEditGridCall(w)
+
+	// Tap player1 = 3.
+	w.TapButtonOnMessage(g, alice, "m:i:s:1:3", scorePrompt.MessageID, scorePrompt.Text)
+	after1, _ := lastEditGridCall(w)
+	if !strings.Contains(after1.Text, "p1=3 p2=-") {
+		t.Errorf("p1 not stamped: %q", after1.Text)
+	}
+
+	// Tap player2 = 1.
+	w.TapButtonOnMessage(g, alice, "m:i:s:2:1", after1.MessageID, after1.Text)
+	after2, _ := lastEditGridCall(w)
+	if !strings.Contains(after2.Text, "p1=3 p2=1") {
+		t.Errorf("p2 not stamped: %q", after2.Text)
+	}
+
+	// Reselect player1 = 5.
+	w.TapButtonOnMessage(g, alice, "m:i:s:1:5", after2.MessageID, after2.Text)
+	after3, _ := lastEditGridCall(w)
+	if !strings.Contains(after3.Text, "p1=5 p2=1") {
+		t.Errorf("p1 reselect not stamped: %q", after3.Text)
+	}
+}
+
+func TestInteractiveMatchConfirmRegistersMatch(t *testing.T) {
+	w, g, alice, _ := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	prompt, _ := lastGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:opp:200", prompt.MessageID, prompt.Text)
+	scorePrompt, _ := lastEditGridCall(w)
+	// p1=3, p2=1
+	w.TapButtonOnMessage(g, alice, "m:i:s:1:3", scorePrompt.MessageID, scorePrompt.Text)
+	cur, _ := lastEditGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:s:2:1", cur.MessageID, cur.Text)
+	cur, _ = lastEditGridCall(w)
+
+	w.TapButtonOnMessage(g, alice, "m:i:confirm", cur.MessageID, cur.Text)
+	m, err := w.Store.Matches().Get(w.Ctx, g.GroupID, 1)
+	if err != nil {
+		t.Fatalf("match not registered: %v", err)
+	}
+	if m.Player1ID != alice.TelegramID || m.Player2ID != 200 {
+		t.Errorf("wrong players: %+v", m)
+	}
+	if m.Player1Score != 3 || m.Player2Score != 1 {
+		t.Errorf("wrong score: %+v", m)
+	}
+	if m.Status != models.MatchStatusPending {
+		t.Errorf("non-admin should yield PENDING, got %v", m.Status)
+	}
+}
+
+func TestInteractiveMatchConfirmRejectsTie(t *testing.T) {
+	w, g, alice, _ := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	prompt, _ := lastGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:opp:200", prompt.MessageID, prompt.Text)
+	cur, _ := lastEditGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:s:1:3", cur.MessageID, cur.Text)
+	cur, _ = lastEditGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:s:2:3", cur.MessageID, cur.Text)
+	cur, _ = lastEditGridCall(w)
+
+	w.TapButtonOnMessage(g, alice, "m:i:confirm", cur.MessageID, cur.Text)
+	// No match row should be created on tie.
+	if _, err := w.Store.Matches().Get(w.Ctx, g.GroupID, 1); err == nil {
+		t.Fatal("tied confirm should not register a match")
+	}
+	// AnswerCallback should explain why.
+	answers := w.Messen.CallsByMethod("AnswerCallback")
+	hasTieMsg := false
+	for _, a := range answers {
+		if strings.Contains(a.Text, "must have a winner") {
+			hasTieMsg = true
+		}
+	}
+	if !hasTieMsg {
+		t.Errorf("expected tie-rejection toast; got answers: %+v", answers)
+	}
+}
+
+func TestInteractiveMatchConfirmRequiresBothScores(t *testing.T) {
+	w, g, alice, _ := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	prompt, _ := lastGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:opp:200", prompt.MessageID, prompt.Text)
+	cur, _ := lastEditGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:s:1:3", cur.MessageID, cur.Text)
+	cur, _ = lastEditGridCall(w)
+	// p2 still unselected — Confirm should refuse.
+	w.TapButtonOnMessage(g, alice, "m:i:confirm", cur.MessageID, cur.Text)
+	if _, err := w.Store.Matches().Get(w.Ctx, g.GroupID, 1); err == nil {
+		t.Fatal("confirm without both scores must not register")
+	}
+}
+
+func TestInteractiveMatchOnlyOwnerCanDrive(t *testing.T) {
+	w, g, alice, bob := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	prompt, _ := lastGridCall(w)
+
+	w.TapButtonOnMessage(g, bob, "m:i:opp:200", prompt.MessageID, prompt.Text)
+	// Bob's tap should leave the keyboard untouched (no EditKeyboardGrid).
+	if _, ok := lastEditGridCall(w); ok {
+		t.Errorf("bob's tap should not edit the keyboard")
+	}
+}
+
+func TestInteractiveMatchCancelEditsToCancelled(t *testing.T) {
+	w, g, alice, _ := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	prompt, _ := lastGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:cancel", prompt.MessageID, prompt.Text)
+	edits := w.Messen.CallsByMethod("EditMessage")
+	if len(edits) == 0 {
+		t.Fatalf("expected EditMessage on cancel, got: %s", w.Messen.Pretty())
+	}
+	if !strings.Contains(edits[len(edits)-1].Text, "cancelled") {
+		t.Errorf("expected 'cancelled' text, got: %q", edits[len(edits)-1].Text)
+	}
+}
+
+func TestInteractiveMatchInlineFormStillWorks(t *testing.T) {
+	w, g, alice, _ := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match @bobby 3-1")
+	// Inline path still uses the legacy SendKeyboard (Confirm/Cancel pair).
+	if calls := w.Messen.CallsByMethod("SendKeyboard"); len(calls) == 0 {
+		t.Fatalf("inline /match should still post Confirm/Cancel keyboard; got: %s", w.Messen.Pretty())
+	}
+}
+
+func TestInteractiveMatchOpponentsSortedByMatchCount(t *testing.T) {
+	w := testkit.New(t)
+	alice := w.AddUser(100, "alice").SetNickname("alice_s21", "kazan", "Kazan", true)
+	bob := w.AddUser(200, "bobby").SetNickname("bob_s21", "kazan", "Kazan", true)
+	carol := w.AddUser(300, "carol").SetNickname("carol_s21", "kazan", "Kazan", true)
+	g := w.AddConfiguredGroup(-1001, "kazan", "Kazan", alice.TelegramID, 5, 7)
+	g = g.AddPlayer(alice.TelegramID).AddPlayer(bob.TelegramID).AddPlayer(carol.TelegramID)
+	// Two prior matches: alice vs carol — carol now has 2 plays, bob has 0.
+	w.Store.PutMatchExt(models.Match{GroupID: g.GroupID, MatchID: 1, Player1ID: alice.TelegramID, Player2ID: carol.TelegramID, Player1Score: 3, Player2Score: 0, Status: models.MatchStatusApproved, PlayedAt: time.Now(), CreatedAt: time.Now()})
+	w.Store.PutMatchExt(models.Match{GroupID: g.GroupID, MatchID: 2, Player1ID: alice.TelegramID, Player2ID: carol.TelegramID, Player1Score: 3, Player2Score: 1, Status: models.MatchStatusApproved, PlayedAt: time.Now(), CreatedAt: time.Now()})
+
+	w.SendInGroup(g, alice, 5, "/match")
+	got, _ := lastGridCall(w)
+
+	// First opponent button should be carol (more matches than bob).
+	if len(got.Buttons) < 2 {
+		t.Fatalf("expected at least 2 buttons, got %d", len(got.Buttons))
+	}
+	if got.Buttons[0].Callback != "m:i:opp:300" {
+		t.Errorf("expected carol first, got %s", got.Buttons[0].Callback)
+	}
+	if got.Buttons[1].Callback != "m:i:opp:200" {
+		t.Errorf("expected bob second, got %s", got.Buttons[1].Callback)
+	}
+}

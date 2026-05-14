@@ -100,6 +100,11 @@ type MatchRepo interface {
 	Delete(ctx context.Context, groupID int64, matchID uint64) error
 	ListByGroup(ctx context.Context, groupID int64) ([]models.Match, error)
 	ListPendingExpired(ctx context.Context, before func(g models.Group) bool) ([]models.Match, error)
+	// CountsByPlayer returns (telegram_id → total matches in this group) across
+	// APPROVED + PENDING rows (UNDONE excluded). Used by the interactive
+	// /match flow to sort the opponent picker by activity. Players with zero
+	// matches are simply absent from the map.
+	CountsByPlayer(ctx context.Context, groupID int64) (map[int64]int, error)
 	// ListByGroupApprovedAndUndone is used by rating recompute paths to
 	// distinguish APPROVED (counts) from UNDONE (excluded).
 }

@@ -350,6 +350,23 @@ func (r matchRepo) ListByGroup(ctx context.Context, gid int64) ([]models.Match, 
 	return out, nil
 }
 
+func (r matchRepo) CountsByPlayer(_ context.Context, gid int64) (map[int64]int, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	out := map[int64]int{}
+	for k, m := range r.s.matches {
+		if k.Group != gid {
+			continue
+		}
+		if m.Status == models.MatchStatusUndone {
+			continue
+		}
+		out[m.Player1ID]++
+		out[m.Player2ID]++
+	}
+	return out, nil
+}
+
 func (r matchRepo) ListPendingExpired(ctx context.Context, before func(g models.Group) bool) ([]models.Match, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()

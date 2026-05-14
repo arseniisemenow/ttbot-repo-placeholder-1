@@ -36,6 +36,11 @@ type Messenger interface {
 	// e.g. "pick a group" prompts.
 	SendInlineKeyboard(ctx context.Context, chatID, topicID int64, text string, buttons []Button) (int64, error)
 
+	// SendKeyboardGrid sends a message with an inline keyboard laid out as a
+	// 2D grid of buttons. Each inner slice is one row. Used by the interactive
+	// /match flow (opponent picker grid, score picker columns).
+	SendKeyboardGrid(ctx context.Context, chatID, topicID int64, text string, rows [][]Button) (int64, error)
+
 	// EditMessage replaces the text of an existing message.
 	EditMessage(ctx context.Context, chatID, messageID int64, text string) error
 
@@ -43,6 +48,10 @@ type Messenger interface {
 	// buttons is a list of (label, callbackData) pairs, rendered in one row.
 	// Pass nil/empty to remove the keyboard.
 	EditKeyboard(ctx context.Context, chatID, messageID int64, text string, buttons []Button) error
+
+	// EditKeyboardGrid is the grid-shaped sibling of EditKeyboard. Pass nil or
+	// empty rows to clear the keyboard.
+	EditKeyboardGrid(ctx context.Context, chatID, messageID int64, text string, rows [][]Button) error
 
 	// DeleteMessage removes a message.
 	DeleteMessage(ctx context.Context, chatID, messageID int64) error

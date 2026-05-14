@@ -151,6 +151,34 @@ func (m *Mock) SendInlineKeyboard(ctx context.Context, chatID, topicID int64, te
 	return id, nil
 }
 
+// flattenGrid joins a grid of buttons into one slice so the mock's existing
+// Buttons field can record them. Row breaks are not preserved in the mock;
+// tests that need to assert layout should query the underlying call manually.
+func flattenGrid(rows [][]Button) []Button {
+	out := []Button{}
+	for _, r := range rows {
+		out = append(out, r...)
+	}
+	return out
+}
+
+func (m *Mock) SendKeyboardGrid(ctx context.Context, chatID, topicID int64, text string, rows [][]Button) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := m.record(Call{Method: "SendKeyboardGrid", ChatID: chatID, TopicID: topicID, Text: text, Buttons: flattenGrid(rows)})
+	if err := m.maybeFail("SendKeyboardGrid", chatID); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func (m *Mock) EditKeyboardGrid(ctx context.Context, chatID, messageID int64, text string, rows [][]Button) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.record(Call{Method: "EditKeyboardGrid", ChatID: chatID, MessageID: messageID, Text: text, Buttons: flattenGrid(rows)})
+	return m.maybeFail("EditKeyboardGrid", chatID)
+}
+
 func (m *Mock) EditMessage(ctx context.Context, chatID, messageID int64, text string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

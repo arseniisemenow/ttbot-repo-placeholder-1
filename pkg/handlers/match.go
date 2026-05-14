@@ -45,9 +45,15 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 		return nil // wrong topic — silent ignore per docs
 	}
 
+	// No-args form opens the interactive picker. Typed-args form continues
+	// to the inline parser below for backward compat.
+	if strings.TrimSpace(args) == "" {
+		return h.startInteractiveMatch(ctx, m, g)
+	}
+
 	tokens := strings.Fields(args)
 	if len(tokens) < 2 || len(tokens) > 3 {
-		return h.reply(ctx, m, "Usage: /match [@player1] @player2 <s1>-<s2>")
+		return h.reply(ctx, m, "Usage: /match [@player1] @player2 <s1>-<s2>, or /match alone for an interactive picker.")
 	}
 	scoreToken := tokens[len(tokens)-1]
 	score, err := validation.ParseScore(scoreToken)
@@ -280,6 +286,8 @@ func (h *Handlers) dispatchCallback(ctx context.Context, q *messenger.CallbackQu
 	}
 	data := q.Data
 	switch {
+	case strings.HasPrefix(data, miPrefix):
+		return h.handleMatchInteractiveCallback(ctx, q, strings.TrimPrefix(data, miPrefix))
 	case strings.HasPrefix(data, cbConfirmPrefix):
 		return h.handleConfirmTap(ctx, q, strings.TrimPrefix(data, cbConfirmPrefix))
 	case strings.HasPrefix(data, cbCancelPrefix):

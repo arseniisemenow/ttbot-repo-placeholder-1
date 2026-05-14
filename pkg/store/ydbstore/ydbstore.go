@@ -849,6 +849,40 @@ func (r matchRepo) ListByGroup(ctx context.Context, gid int64) ([]models.Match, 
 	return out, err
 }
 
+func (r matchRepo) CountsByPlayer(ctx context.Context, gid int64) (map[int64]int, error) {
+	// Pull (player1_id, player2_id) for non-UNDONE matches in this group, tally
+	// in Go. Group volumes are small (hundreds of rows) so the row-by-row scan
+	// is cheaper than two GROUP BY UNION subqueries.
+	out := map[int64]int{}
+	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
+		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
+			`DECLARE $g AS Uint64;
+			 SELECT player1_id, player2_id FROM matches
+			 WHERE group_id = $g AND status != "UNDONE";`,
+			table.NewQueryParameters(table.ValueParam("$g", types.Uint64Value(uint64(gid)))))
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+		if err := res.NextResultSetErr(ctx); err != nil {
+			return err
+		}
+		for res.NextRow() {
+			var p1, p2 uint64
+			if err := res.ScanNamed(
+				named.Required("player1_id", &p1),
+				named.Required("player2_id", &p2),
+			); err != nil {
+				return err
+			}
+			out[int64(p1)]++
+			out[int64(p2)]++
+		}
+		return nil
+	})
+	return out, err
+}
+
 func (r matchRepo) ListPendingExpired(ctx context.Context, before func(g models.Group) bool) ([]models.Match, error) {
 	// We pull all PENDING and filter in Go (small data; saves a join).
 	var pending []models.Match
