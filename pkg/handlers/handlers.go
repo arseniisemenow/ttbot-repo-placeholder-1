@@ -132,6 +132,25 @@ func (h *Handlers) tryIdentity(ctx context.Context, fn func(svc *identity.Servic
 // Errors are logged and swallowed at the top level — the webhook always
 // returns 200 to Telegram.
 func (h *Handlers) Dispatch(ctx context.Context, u *messenger.Update) error {
+	// /match-flow perf instrumentation: gated on TTBOT_MATCH_PERF_LOG=1.
+	// We log on /match command messages and on the m:i:* callback path
+	// (interactive picker taps) — covers the first reply and every tap
+	// inside the same flow.
+	var tDispatch time.Time
+	logMatch := false
+	if matchPerfLogEnabled && u.Message != nil && strings.HasPrefix(strings.TrimSpace(u.Message.Text), "/match") {
+		logMatch = true
+		tDispatch = time.Now()
+		from := int64(0)
+		if u.Message.From != nil {
+			from = u.Message.From.ID
+		}
+		perfLog("dispatch.enter kind=message chat=%d user=%d thread=%d",
+			u.Message.Chat.ID, from, u.Message.MessageThreadID)
+	}
+	if logMatch {
+		defer func() { perfLog("dispatch.exit total=%v", time.Since(tDispatch)) }()
+	}
 	switch {
 	case u.Message != nil:
 		return h.dispatchMessage(ctx, u.Message)
@@ -167,7 +186,10 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 	// anything else that lands in there. The maintained messages are posted
 	// by the bot itself and so don't arrive as updates; the check below is
 	// defensive in case Telegram ever echoes them back.
-	if h.deleteStatsTopicLitter(ctx, m) {
+	tLitter := time.Now()
+	litterHit := h.deleteStatsTopicLitter(ctx, m)
+	litterDur := time.Since(tLitter)
+	if litterHit {
 		return nil
 	}
 	// DM-only force-reply detectors run BEFORE the command switch — reply
@@ -190,7 +212,13 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 	// Any command typed in a registered group backfills the participants cache.
 	// Captures members who pre-date the bot (no chat_member event was emitted
 	// for them) — they get a row the first time they run any command.
+	tUpsert := time.Now()
 	h.upsertSenderParticipant(ctx, m)
+	upsertDur := time.Since(tUpsert)
+	if cmd == "/match" {
+		perfLog("dispatch.pre dur=%v (litter=%v upsertSender=%v)",
+			litterDur+upsertDur, litterDur, upsertDur)
+	}
 	isPrivate := m.Chat.Type == "private"
 	switch cmd {
 	// --- DM-only ---

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	s21account "github.com/arseniisemenow/s21-account-go"
 
@@ -34,7 +35,9 @@ type matchPlayer struct {
 
 // handleMatch implements /match.
 func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args string) error {
+	tGroups := time.Now()
 	g, err := h.Store.Groups().Get(ctx, m.Chat.ID)
+	perfLog("handleMatch.groupsGet dur=%v", time.Since(tGroups))
 	if err != nil {
 		return nil // unknown group — silently ignore
 	}
@@ -274,8 +277,10 @@ func (h *Handlers) hasNickname(ctx context.Context, telegramID int64) bool {
 // caller's fallbacks (Telegram username, "Player N") cover those cases.
 func (h *Handlers) lookupS21Nickname(ctx context.Context, telegramID int64) (string, bool) {
 	if u, ok := h.S21Nicks.Get(telegramID); ok {
+		perfLog("lookupS21Nickname tid=%d hit=local cache", telegramID)
 		return u.Nickname, u.Found && u.Nickname != ""
 	}
+	tIdent := time.Now()
 	var got identity.User
 	var fetched bool
 	h.tryIdentity(ctx, func(svc *identity.Service) error {
@@ -287,6 +292,7 @@ func (h *Handlers) lookupS21Nickname(ctx context.Context, telegramID int64) (str
 		fetched = true
 		return nil
 	})
+	perfLog("lookupS21Nickname tid=%d hit=remote fetched=%t dur=%v", telegramID, fetched, time.Since(tIdent))
 	if fetched {
 		h.S21Nicks.Put(telegramID, got)
 		return got.Nickname, got.Found && got.Nickname != ""

@@ -451,18 +451,19 @@ func safeLabel(s string) string {
 // ---------------- /match entry ----------------
 
 // startInteractiveMatch posts the opponent picker. Called from handleMatch
-// when /match arrives with no args. Pre-resolves the caller's label so the
-// later score-picker step never has to do it again.
+// when /match arrives with no args.
+//
+// Owner label is intentionally left empty here — the opponent picker text
+// doesn't display it. The opp-pick branch resolves it lazily, on the
+// callback path, so a cold S21 round-trip (1.5–4 s) can't land on the
+// first reply. The draft and the header carry ownerLabel="" until then;
+// cold-restore handles that transparently (url.QueryEscape("")=="").
 func (h *Handlers) startInteractiveMatch(ctx context.Context, m *messenger.Message, g models.Group) error {
 	t0 := time.Now()
 
-	tLabel := time.Now()
-	ownerLabel := h.playerLabel(ctx, g.GroupID, m.From.ID)
-	perfLog("start: playerLabel(owner) dur=%v", time.Since(tLabel))
-
 	d := &matchDraft{
 		ownerID:    m.From.ID,
-		ownerLabel: ownerLabel,
+		ownerLabel: "", // resolved lazily on opp-pick; see dispatchTap
 		page:       1,
 		p1:         -1, p2: -1,
 	}
@@ -590,8 +591,16 @@ func (h *Handlers) dispatchTap(ctx context.Context, q *messenger.CallbackQuery, 
 		if err != nil || tid == d.ownerID {
 			return h.M.AnswerCallback(ctx, q.ID, "")
 		}
-		// Pre-resolve the opponent label here so subsequent score-cell
-		// taps don't need any identity service round-trips.
+		// Lazy-resolve the owner label on this callback path instead of at
+		// /match send-time — the opponent picker doesn't display it, and
+		// keeping a worst-case S21 round-trip off the first reply is the
+		// whole point. The opponent label is also pre-resolved here so
+		// subsequent score-cell taps don't need any identity calls.
+		if d.ownerLabel == "" {
+			tOwner := time.Now()
+			d.ownerLabel = h.playerLabel(ctx, chatID, d.ownerID)
+			perfLog("opp: playerLabel(owner, lazy) dur=%v", time.Since(tOwner))
+		}
 		tLabel := time.Now()
 		d.oppID = tid
 		d.oppLabel = h.playerLabel(ctx, chatID, tid)
