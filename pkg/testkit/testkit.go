@@ -324,6 +324,7 @@ func (w *World) TapButtonOnMessage(g Group, from User, callbackData string, mess
 	if err := w.Handlers.Dispatch(w.Ctx, upd); err != nil {
 		w.T.Fatalf("Dispatch: %v", err)
 	}
+	w.Handlers.WaitForDetachedRefreshes()
 }
 
 // JoinGroup synthesizes a ChatMember update where someone joins the group.
@@ -338,6 +339,7 @@ func (w *World) JoinGroup(g Group, joiner User) {
 	if err := w.Handlers.Dispatch(w.Ctx, upd); err != nil {
 		w.T.Fatalf("Dispatch: %v", err)
 	}
+	w.Handlers.WaitForDetachedRefreshes()
 }
 
 func (w *World) dispatchMessage(chat messenger.Chat, from User, topicID int64, text string, reply *messenger.Message) {
@@ -352,6 +354,7 @@ func (w *World) dispatchMessage(chat messenger.Chat, from User, topicID int64, t
 	if err := w.Handlers.Dispatch(w.Ctx, &messenger.Update{Message: msg}); err != nil {
 		w.T.Fatalf("Dispatch: %v", err)
 	}
+	w.Handlers.WaitForDetachedRefreshes()
 }
 
 // RunPeriodic invokes the cron job.

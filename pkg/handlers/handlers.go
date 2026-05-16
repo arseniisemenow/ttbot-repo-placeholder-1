@@ -74,6 +74,12 @@ type Handlers struct {
 	// the message-text header is a mirror that survives cold starts.
 	matchDraftsMu sync.RWMutex
 	matchDrafts   map[string]*matchDraft
+
+	// detachedWG tracks goroutines spawned by detachedRefreshStatsTopic
+	// (and any future detached side-effects). Production code never waits
+	// on it — the whole point is fire-and-forget — but tests join here so
+	// assertions after a Dispatch see the side effects.
+	detachedWG sync.WaitGroup
 }
 
 // New constructs Handlers.

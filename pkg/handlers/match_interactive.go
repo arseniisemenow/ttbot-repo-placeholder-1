@@ -772,7 +772,7 @@ func (h *Handlers) registerInteractiveMatch(ctx context.Context, g models.Group,
 		Player2Score: p2Score,
 	}, verb)
 	if isAdmin {
-		_ = h.refreshStatsTopic(ctx, g)
+		h.detachedRefreshStatsTopic(g)
 		return text, nil, nil
 	}
 	// Non-admin: stamp the author's auto-confirm. The caller (the confirm

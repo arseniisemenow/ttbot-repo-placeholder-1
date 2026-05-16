@@ -113,7 +113,7 @@ func (h *Handlers) toggleMatchAndAnnounce(ctx context.Context, m *messenger.Mess
 	if err := h.reply(ctx, m, h.renderMatch(ctx, g.GroupID, announced, verb)); err != nil {
 		return err
 	}
-	_ = h.refreshStatsTopic(ctx, g)
+	h.detachedRefreshStatsTopic(g)
 	return nil
 }
 

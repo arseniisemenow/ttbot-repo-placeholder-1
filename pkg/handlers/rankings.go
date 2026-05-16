@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-core/pkg/models"
@@ -96,6 +98,44 @@ func (h *Handlers) renderRankings(ctx context.Context, g models.Group, engine ra
 		}
 	}
 	return strings.TrimRight(sb.String(), "\n"), nil
+}
+
+// detachedRefreshStatsTopic kicks off refreshStatsTopic in a goroutine
+// with a fresh context, so user-facing handlers can return immediately
+// without paying the 2–5 s stats-refresh cost on the critical path.
+//
+// Yandex Cloud Functions caveat: when the handler returns, the container
+// may freeze CPU. The goroutine usually completes before the next
+// invocation lands (warm containers stay up 10–15 min) but a kill
+// mid-refresh silently drops that update. The user's stats topic catches
+// up on the next match registration/confirm/undo in the same group —
+// every mutation re-runs the full refresh, so missed refreshes self-heal
+// on the next event. If that's not enough, layer a dirty-flag + cron
+// safety net later (separate change).
+//
+// The Group struct is passed by value so the goroutine has a stable
+// snapshot — concurrent mutations to the row in YDB don't race with the
+// refresh-side reads.
+func (h *Handlers) detachedRefreshStatsTopic(g models.Group) {
+	h.detachedWG.Add(1)
+	go func() {
+		defer h.detachedWG.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		if err := h.refreshStatsTopic(ctx, g); err != nil {
+			log.Printf("detached refreshStatsTopic group=%d: %v", g.GroupID, err)
+		}
+	}()
+}
+
+// WaitForDetachedRefreshes blocks until every goroutine spawned by
+// detachedRefreshStatsTopic has finished. Production code never calls
+// this — the goroutines are fire-and-forget and the function returns
+// to Yandex immediately after the user-visible reply. Tests call it
+// after each Dispatch so assertions on the stats topic and group row
+// see the refresh side effects.
+func (h *Handlers) WaitForDetachedRefreshes() {
+	h.detachedWG.Wait()
 }
 
 // refreshStatsTopic maintains exactly THREE messages in the stats topic.

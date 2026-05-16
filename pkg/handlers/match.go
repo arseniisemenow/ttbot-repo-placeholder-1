@@ -170,7 +170,7 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 		if err != nil {
 			return err
 		}
-		_ = h.refreshStatsTopic(ctx, g)
+		h.detachedRefreshStatsTopic(g)
 		return nil
 	}
 
@@ -395,7 +395,7 @@ func (h *Handlers) handleConfirmTap(ctx context.Context, q *messenger.CallbackQu
 		_ = h.Store.Matches().UpdateStatus(ctx, gid, mid, models.MatchStatusApproved)
 		_ = h.M.EditKeyboard(ctx, q.Message.Chat.ID, q.Message.MessageID,
 			h.renderMatch(ctx, gid, match, "confirmed"), nil)
-		_ = h.refreshStatsTopic(ctx, g)
+		h.detachedRefreshStatsTopic(g)
 		return h.M.AnswerCallback(ctx, q.ID, "Approved by admin")
 	}
 
@@ -408,7 +408,7 @@ func (h *Handlers) handleConfirmTap(ctx context.Context, q *messenger.CallbackQu
 		_ = h.Store.Matches().UpdateStatus(ctx, gid, mid, models.MatchStatusApproved)
 		_ = h.M.EditKeyboard(ctx, q.Message.Chat.ID, q.Message.MessageID,
 			h.renderMatch(ctx, gid, match, "confirmed"), nil)
-		_ = h.refreshStatsTopic(ctx, g)
+		h.detachedRefreshStatsTopic(g)
 		return h.M.AnswerCallback(ctx, q.ID, "Confirmed")
 	}
 	remaining := []messenger.Button{}
